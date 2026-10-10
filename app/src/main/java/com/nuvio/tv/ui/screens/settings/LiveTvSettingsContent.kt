@@ -13,6 +13,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PlayCircleFilled
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Refresh
@@ -98,6 +111,8 @@ private sealed interface LiveDialog {
     data object HomeRowTitle : LiveDialog
     data class ConfirmDeletePlaylist(val source: PlaylistSource) : LiveDialog
     data class ConfirmDeleteEpg(val source: EpgSource) : LiveDialog
+    /** "Are you sure?" before a reset, clear or similar. */
+    data class Confirm(val title: String, val message: String, val label: String, val action: () -> Unit) : LiveDialog
 }
 
 private val EPG_OFFSETS = (-24..24).map { it * 30 }
@@ -159,9 +174,17 @@ fun LiveTvSettingsContent(
     val onDemandHas by viewModel.onDemand.hasContent.collectAsStateWithLifecycle()
     val onDemandStatus by viewModel.onDemand.status.collectAsStateWithLifecycle()
     var pinWrong by remember { mutableStateOf(false) }
-    var driveExpanded by remember { mutableStateOf(false) }
 
     fun update(t: (LiveTvSettings) -> LiveTvSettings) = viewModel.update(t)
+
+    // Every section starts folded; OK on its header opens or closes it (not remembered).
+    var open by remember { mutableStateOf(setOf<String>()) }
+    fun toggle(key: String) { open = if (key in open) open - key else open + key }
+    /** Asks before doing something that can't simply be undone. */
+    fun confirm(title: String, message: String, label: String, action: () -> Unit) {
+        dialog = LiveDialog.Confirm(title, message, label, action)
+    }
+    val hasPin = s.parentalPin.length >= 4
 
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -178,26 +201,46 @@ fun LiveTvSettingsContent(
             contentPadding = PaddingValues(bottom = 18.dp),
             verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md)
         ) {
-            // ------------------------------------------------------------ Google Drive sync
+            // ------------------------------------------------------------ Backup & Sync
             item(key = "drive") {
                 DriveSyncCard(
                     modifier = if (initialFocusRequester != null) Modifier.focusRequester(initialFocusRequester) else Modifier,
                     state = drive,
-                    expanded = driveExpanded,
-                    onToggleExpanded = { driveExpanded = !driveExpanded },
+                    expanded = "drive" in open,
+                    onToggleExpanded = { toggle("drive") },
                     onConnect = { viewModel.driveSync.beginSignIn() },
                     onAutoSync = { viewModel.driveSync.setAutoSync(it) },
-                    onBackUp = { viewModel.driveSync.backUpNow() },
+                    onBackUp = {
+                        confirm(
+                            "Back up now?",
+                            "The copy in your Google Drive is replaced with this TV's Live TV setup.",
+                            "Back Up"
+                        ) { viewModel.driveSync.backUpNow() }
+                    },
                     onRestore = { dialog = LiveDialog.ConfirmRestore },
-                    onDisconnect = { viewModel.driveSync.disconnect() }
+                    onDisconnect = {
+                        confirm(
+                            "Disconnect Google Drive?",
+                            "This TV stops syncing. Your backup stays in your Google Drive.",
+                            "Disconnect"
+                        ) { viewModel.driveSync.disconnect() }
+                    }
                 )
             }
 
-            // ------------------------------------------------------------ playlists
-            item(key = "playlists") {
-                SettingsGroupCard(title = "Playlists", subtitle = "Your channel lists. Select one to edit, update, turn off or delete it.") {
+            // ------------------------------------------------------------ Playlists & Guides
+            item(key = "sources") {
+                LiveSection(
+                    title = "Playlists & Guides",
+                    summary = if (status.loading) (status.message ?: "Updating…")
+                    else "${playlists.size} ${if (playlists.size == 1) "playlist" else "playlists"} · ${epgs.size} ${if (epgs.size == 1) "guide" else "guides"}",
+                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+                    open = "sources" in open,
+                    onToggle = { toggle("sources") }
+                ) {
+                    SubHeading("Playlists")
                     if (status.loading) LoadingLine(status.message ?: "Updating…")
-                    playlists.forEachIndexed { index, pl ->
+                    playlists.forEach { pl ->
                         SettingsActionRow(
                             title = pl.name + if (pl.isXtream) " (Xtream)" else "",
                             subtitle = when {
@@ -212,26 +255,18 @@ fun LiveTvSettingsContent(
                         )
                     }
                     SettingsActionRow(
-                        title = "Add M3U playlist",
-                        subtitle = "Add a channel list using the M3U link from your provider",
+                        title = "Add M3U Playlist",
+                        subtitle = "A channel list from the M3U link your provider gave you",
                         leadingIcon = Icons.Default.Add,
                         onClick = { dialog = LiveDialog.AddM3u }
                     )
                     SettingsActionRow(
-                        title = "Add Xtream Codes login",
-                        subtitle = "Sign in with the server, username and password from your provider. Its TV guide is added too.",
+                        title = "Add Xtream Codes Login",
+                        subtitle = "Sign in with the server, username and password from your provider. Its TV guide comes with it.",
                         leadingIcon = Icons.Default.Add,
                         onClick = { dialog = LiveDialog.AddXtream }
                     )
-                }
-            }
-
-            // ------------------------------------------------------------ EPG
-            item(key = "epg") {
-                SettingsGroupCard(
-                    title = "TV guide sources (EPG)",
-                    subtitle = "Where TV listings come from. Guides linked in your playlists load automatically; add more here."
-                ) {
+                    SubHeading("TV Guides (EPG)")
                     epgs.forEach { e ->
                         SettingsActionRow(
                             title = e.name,
@@ -242,197 +277,154 @@ fun LiveTvSettingsContent(
                         )
                     }
                     SettingsActionRow(
-                        title = "Add EPG source",
-                        subtitle = "Add a TV guide using an XMLTV link (ending in .xml or .xml.gz)",
+                        title = "Add EPG Source",
+                        subtitle = "Extra TV listings from an XMLTV link (ending in .xml or .xml.gz). Guides linked in your playlists load by themselves.",
                         leadingIcon = Icons.Default.Add,
                         onClick = { dialog = LiveDialog.AddEpg }
                     )
+                    SubHeading("Updates")
                     SettingsActionRow(
-                        title = "Update playlists and guides now",
+                        title = "Update Everything Now",
                         subtitle = "Downloads the latest channels and listings instead of waiting for the next automatic update",
                         leadingIcon = Icons.Default.Refresh,
                         onClick = { viewModel.refreshAll() }
                     )
+                    SettingsActionRow(
+                        "Check Playlists for Updates Every", "How often channel lists are downloaded again from your providers",
+                        hoursLabel(s.playlistRefreshHours), onClick = { dialog = LiveDialog.PlaylistRefresh }
+                    )
+                    SettingsActionRow(
+                        "Check Guides for Updates Every", "How often TV listings are downloaded again",
+                        hoursLabel(s.epgRefreshHours), onClick = { dialog = LiveDialog.EpgRefresh }
+                    )
                 }
             }
 
-            // ------------------------------------------------------------ guide layout
-            item(key = "layout") {
-                SettingsGroupCard(title = "Guide layout", subtitle = "What the TV guide shows, and how much fits on screen") {
-                    SettingsToggleRow(
-                        "Hide preview window",
-                        "Removes the small video of the highlighted channel from the top-right corner",
-                        !s.showPreview,
-                        { update { it.copy(showPreview = !it.showPreview) } }
+            // ------------------------------------------------------------ Channels
+            item(key = "channels") {
+                LiveSection(
+                    title = "Channels",
+                    summary = "Name cleanup, hidden channels and groups, your groups, resets",
+                    icon = Icons.Default.LiveTv,
+                    open = "channels" in open,
+                    onToggle = { toggle("channels") }
+                ) {
+                    Text(
+                        text = "Tip: long-press a channel in the guide to rename, renumber, hide or favorite it. Long-press a group to rename, move or hide it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NuvioTheme.colors.TextSecondary,
+                        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.xs)
                     )
-                    SettingsToggleRow(
-                        "Hide info panel",
-                        "Removes the top-left panel with the highlighted show's poster, title, time and description",
-                        !s.showProgramDetails,
-                        { update { it.copy(showProgramDetails = !it.showProgramDetails) } }
-                    )
-                    SettingsToggleRow(
-                        "Show posters",
-                        "Posters for what's on, from your addons. Off: just the channel logo.",
-                        s.showPosters,
-                        { update { it.copy(showPosters = !it.showPosters) } }
-                    )
-                    SettingsToggleRow(
-                        "Show playlist in info panel",
-                        "Shows which playlist the highlighted channel comes from",
-                        s.showPlaylistInInfo,
-                        { update { it.copy(showPlaylistInInfo = !it.showPlaylistInInfo) } }
-                    )
-                    SettingsToggleRow(
-                        "Smaller info panel and preview",
-                        "Shrinks the top of the guide to about two-thirds of its height, so more channels fit",
-                        s.smallHeader,
-                        { update { it.copy(smallHeader = !it.smallHeader) } }
-                    )
-                    SettingsToggleRow(
-                        "Hide the \"now\" line",
-                        "Removes the vertical line that marks the current time in the guide",
-                        !s.showNowLine,
-                        { update { it.copy(showNowLine = !it.showNowLine) } }
-                    )
-                    SettingsToggleRow(
-                        "Compact channel rows",
-                        "Makes each channel row slimmer, so about two more channels fit",
-                        s.compactRows,
-                        { update { it.copy(compactRows = !it.compactRows) } }
-                    )
-                    SettingsToggleRow(
-                        "Browse by channel name",
-                        "Like satellite boxes: picking a group lands on the channel names. OK plays, Right opens the schedule, Left goes back to the groups.",
-                        s.browseByChannelName,
-                        { update { it.copy(browseByChannelName = !it.browseByChannelName) } }
-                    )
-                    SettingsToggleRow(
-                        "Hide channel numbers",
-                        "Removes the number in front of each channel",
-                        !s.showChannelNumbers,
-                        { update { it.copy(showChannelNumbers = !it.showChannelNumbers) } }
-                    )
-                    SettingsToggleRow(
-                        "Hide channel logos",
-                        "Removes the logo in front of each channel name",
-                        !s.showChannelLogos,
-                        { update { it.copy(showChannelLogos = !it.showChannelLogos) } }
-                    )
+                    SubHeading("Channel Names")
                     SettingsActionRow(
-                        title = "Channel name editor",
-                        subtitle = "Prefixes and suffixes to remove from channel names, like USA, 24/7 or FHD, separated by commas",
+                        title = "Channel Name Cleanup",
+                        subtitle = "Words to take off the start or end of channel names, like USA, 24/7 or FHD, separated by commas",
                         value = com.nuvio.tv.livetv.model.ChannelNameEditor.terms(s.nameRemovals).size.let { if (it == 0) "Off" else "$it removed" },
                         onClick = { dialog = LiveDialog.NameEditor }
                     )
                     if (s.nameRemovals.isBlank()) {
                         SettingsActionRow(
-                            "Add common prefixes and suffixes",
+                            "Add Common Prefixes & Suffixes",
                             "Fills in: ${com.nuvio.tv.livetv.model.ChannelNameEditor.COMMON}",
                             onClick = { update { it.copy(nameRemovals = com.nuvio.tv.livetv.model.ChannelNameEditor.COMMON) } }
                         )
                     }
-                    SettingsToggleRow(
-                        "Hide channel names",
-                        "Shows only numbers and logos, which leaves more room for the schedule",
-                        !s.showChannelNames,
-                        { update { it.copy(showChannelNames = !it.showChannelNames) } }
-                    )
-                    // Hidden developer tool: only shown after typing the secret word into the
-                    // channel name editor (see NameEditor below).
-                    if (developerToolsOn) {
-                        SettingsActionRow(
-                            "Test poster lookup",
-                            "Developer tool: what your addons return for a title",
-                            onClick = { dialog = LiveDialog.PosterTest }
-                        )
-                        SettingsActionRow(
-                            "Remote button tester",
-                            "Developer tool: shows every button the remote sends",
-                            onClick = { dialog = LiveDialog.ButtonTester }
-                        )
-                        SettingsActionRow(
-                            "Live TV start-up report",
-                            "Developer tool: what loading did this time, and how long it took",
-                            onClick = { dialog = LiveDialog.LoadReport }
-                        )
-                    }
+                    SubHeading("Hidden & Your Groups")
+                    SettingsActionRow("Hidden Channels", "Channels you hid. Select one to show it again.", "${user.hiddenChannels.size}", leadingIcon = Icons.Default.VisibilityOff, onClick = { dialog = LiveDialog.HiddenChannels })
+                    SettingsActionRow("Hidden Groups", "Groups you hid. Select one to show it again.", "${user.hiddenGroups.size}", leadingIcon = Icons.Default.VisibilityOff, onClick = { dialog = LiveDialog.HiddenGroups })
+                    SettingsActionRow("My Groups", "Groups you created. Select one to delete it.", "${user.customGroups.size}", onClick = { dialog = LiveDialog.CustomGroups })
+                    SubHeading("Clear & Reset")
+                    SettingsActionRow("Clear Favorites", "Removes every channel from Favorites", "${user.favorites.size}", onClick = {
+                        confirm("Clear favorites?", "Every channel is taken out of Favorites.", "Clear") { viewModel.clearFavorites() }
+                    })
+                    SettingsActionRow("Clear Recently Watched", "Empties the Recently Watched group", "${user.recent.size}", onClick = {
+                        confirm("Clear recently watched?", "The Recently Watched group is emptied.", "Clear") { viewModel.clearRecent() }
+                    })
                     SettingsActionRow(
-                        title = "Highlight style",
-                        subtitle = "How the selected show is marked: an outline, or filled with your theme color",
-                        value = if (s.solidHighlight) "Solid" else "Outline",
-                        onClick = { dialog = LiveDialog.HighlightChoice }
+                        "Reset Channel Names & Numbers", "Puts back the names and numbers from your playlist",
+                        "${(user.channelNames.keys + user.channelNumbers.keys).size}",
+                        onClick = {
+                            confirm("Reset channel names and numbers?", "Every channel you renamed or renumbered goes back to its name and number from the playlist.", "Reset") { viewModel.resetChannelEdits() }
+                        }
                     )
-                    SettingsToggleRow(
-                        "Quality badges",
-                        "Shows 4K, FHD, HD or SD next to channels you've watched",
-                        s.showQualityBadges,
-                        { update { it.copy(showQualityBadges = !it.showQualityBadges) } }
+                    SettingsActionRow("Reset Group Names & Order", "Puts back the group names and order from your playlist", onClick = {
+                        confirm("Reset group names and order?", "Renamed groups get their playlist names back, and the groups go back to the playlist's order.", "Reset") { viewModel.resetGroupEdits() }
+                    })
+                    SettingsActionRow(
+                        "Reset Channel Order", "Undoes Reorder Channels in every group",
+                        "${user.channelOrder.size}", onClick = {
+                            confirm("Reset channel order?", "Every group goes back to its normal channel order.", "Reset") { viewModel.resetChannelOrder() }
+                        }
                     )
-                    SettingsToggleRow(
-                        "24-hour clock",
-                        "Shows times like 20:30 instead of 8:30 PM",
-                        s.use24HourClock,
-                        { update { it.copy(use24HourClock = !it.use24HourClock) } }
+                    SettingsActionRow(
+                        "Remove Copied Channels", "Takes out every channel you copied into another group. The originals stay.",
+                        "${user.channelCopies.values.sumOf { it.size }}", onClick = {
+                            confirm("Remove copied channels?", "Every channel you copied into another group is taken out of it. The originals stay where they are.", "Remove") { viewModel.clearChannelCopies() }
+                        }
+                    )
+                    SettingsActionRow(
+                        "Reset EPG Assignments",
+                        "Channels you assigned a guide to go back to automatic matching",
+                        "${user.epgOverrides.size}",
+                        onClick = {
+                            confirm("Reset EPG assignments?", "Every channel you assigned a guide to, or unassigned, goes back to automatic matching.", "Reset") { viewModel.resetEpgAssignments() }
+                        }
                     )
                 }
             }
 
-            // ------------------------------------------------------------ groups
+            // ------------------------------------------------------------ Groups
             item(key = "groups") {
-                SettingsGroupCard(title = "Channel groups", subtitle = "The group list that slides out when you press Left in the guide") {
+                LiveSection(
+                    title = "Groups",
+                    summary = "The group list on the left of the guide",
+                    icon = Icons.Default.Folder,
+                    open = "groups" in open,
+                    onToggle = { toggle("groups") }
+                ) {
+                    SubHeading("Built-In Groups")
                     SettingsToggleRow(
-                        "Hide Favorites group",
-                        "Removes the group of channels you've marked as favorites",
-                        !s.showFavoritesGroup,
+                        "Show Favorites",
+                        "The group of channels you've marked as favorites",
+                        s.showFavoritesGroup,
                         { update { it.copy(showFavoritesGroup = !it.showFavoritesGroup) } }
                     )
                     SettingsToggleRow(
-                        "Hide Recently watched group",
-                        "Removes the group of channels you watched last",
-                        !s.showRecentGroup,
+                        "Show Recently Watched",
+                        "The group of channels you watched last",
+                        s.showRecentGroup,
                         { update { it.copy(showRecentGroup = !it.showRecentGroup) } }
                     )
                     SettingsToggleRow(
-                        "Hide All channels group",
-                        "Removes the group with every channel, leaving your groups and the playlist's groups",
-                        !s.showAllChannelsGroup,
+                        "Show All Channels",
+                        "The group with every channel in it",
+                        s.showAllChannelsGroup,
                         { update { it.copy(showAllChannelsGroup = !it.showAllChannelsGroup) } }
                     )
+                    SubHeading("The List")
                     SettingsToggleRow(
-                        "Group by playlist",
-                        "With more than one playlist, lists each playlist's groups under its own heading, which you can fold away",
+                        "Group by Playlist",
+                        "With more than one playlist, each playlist's groups sit under its own heading, which you can fold away",
                         s.groupPlaylistHeadings,
                         { update { it.copy(groupPlaylistHeadings = !it.groupPlaylistHeadings) } }
                     )
                     SettingsToggleRow(
-                        "Hide channel counts",
-                        "Removes the number of channels shown next to each group",
-                        !s.showGroupCounts,
+                        "Show Channel Counts",
+                        "The number of channels next to each group",
+                        s.showGroupCounts,
                         { update { it.copy(showGroupCounts = !it.showGroupCounts) } }
                     )
-                    SettingsToggleRow(
-                        "Number channels 1, 2, 3… in each group",
-                        "Replaces the playlist's numbers with the order channels appear in each group. 20 favorites become 1 to 20.",
-                        s.sequentialNumbers,
-                        { update { it.copy(sequentialNumbers = !it.sequentialNumbers) } }
-                    )
-                    SettingsToggleRow(
-                        "Open on last group",
-                        "Opening Live TV shows the group you last watched a channel in",
-                        s.rememberLastGroup,
-                        { update { it.copy(rememberLastGroup = !it.rememberLastGroup) } }
-                    )
                     SettingsActionRow(
-                        title = "Group order",
-                        subtitle = "How the group list is sorted. Your order follows Reorder groups (anything not moved stays in playlist order).",
+                        title = "Group Order",
+                        subtitle = "How the group list is sorted. Your order follows Reorder Groups; anything you haven't moved stays in playlist order.",
                         value = when (s.groupSort) { "playlist" -> "Playlist order"; "name" -> "Name (A–Z)"; else -> "Your order" },
                         onClick = {
                             update { st -> st.copy(groupSort = when (st.groupSort) { "custom" -> "playlist"; "playlist" -> "name"; else -> "custom" }) }
                         }
                     )
+                    SubHeading("Channels in a Group")
                     SettingsActionRow(
-                        title = "Channel order",
+                        title = "Channel Order",
                         subtitle = "How channels are sorted in every group, Favorites included. Playlist order keeps your own order in Favorites and your groups.",
                         value = when (s.channelSort) {
                             ChannelSort.PLAYLIST -> "Playlist order"
@@ -441,82 +433,292 @@ fun LiveTvSettingsContent(
                         },
                         onClick = { dialog = LiveDialog.SortChoice }
                     )
+                    SettingsToggleRow(
+                        "Number Channels 1, 2, 3… in Each Group",
+                        "Replaces the playlist's numbers with each channel's place in the group: 20 favorites become 1 to 20",
+                        s.sequentialNumbers,
+                        { update { it.copy(sequentialNumbers = !it.sequentialNumbers) } }
+                    )
                 }
             }
 
-            // ------------------------------------------------------------ playback
-            item(key = "playback") {
-                SettingsGroupCard(title = "Playback", subtitle = "What happens when you pick and watch a channel") {
+            // ------------------------------------------------------------ On Demand
+            item(key = "on_demand") {
+                LiveSection(
+                    title = "On Demand",
+                    summary = when {
+                        onDemandStatus.loading -> onDemandStatus.message ?: "Importing movies and series…"
+                        !onDemandHas -> "Nothing imported yet"
+                        else -> "Movies & series imported" + if (s.onDemandInSidebar) " · in the side menu" else ""
+                    },
+                    icon = Icons.Default.Movie,
+                    open = "on_demand" in open,
+                    onToggle = { toggle("on_demand") }
+                ) {
+                    Text(
+                        text = "Movies and series from Xtream logins with movies & series switched on below.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NuvioTheme.colors.TextSecondary,
+                        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.xs)
+                    )
+                    if (onDemandStatus.loading) LoadingLine(onDemandStatus.message ?: "Importing movies and series…")
+                    SubHeading("Providers")
+                    SettingsActionRow(
+                        "Update Movies & Series Now",
+                        onDemandStatus.message ?: if (onDemandHas) "Imported. Updates once a day by itself." else "Nothing imported yet",
+                        onClick = { viewModel.onDemand.refreshNow() }
+                    )
+                    // One switch per Xtream login (logins added before On Demand start switched off).
+                    playlists.filter { it.isXtream }.forEach { pl ->
+                        SettingsToggleRow(
+                            "Movies & Series from ${pl.name}",
+                            if (pl.importVod) "Included" else "Not included. Switch on to import this provider's movies and series.",
+                            pl.importVod,
+                            { viewModel.savePlaylist(pl.copy(importVod = !pl.importVod)) }
+                        )
+                    }
+                    SubHeading("In Nuvio")
                     SettingsToggleRow(
-                        "Overlay mode",
-                        "Left while watching shows channels and schedules over the video. Off: Left goes back to the guide's group list.",
-                        s.overlayMode,
-                        { update { it.copy(overlayMode = !it.overlayMode) } }
+                        "Show On Demand in the Side Menu",
+                        "Its own page in Nuvio's menu, once a provider's movies or series are imported",
+                        s.onDemandInSidebar,
+                        { update { it.copy(onDemandInSidebar = !it.onDemandInSidebar) } }
                     )
                     SettingsToggleRow(
-                        "OK opens full screen",
-                        "Pressing OK on a show goes straight to full screen instead of playing it in the preview first",
-                        s.openFullscreenOnSelect,
-                        { update { it.copy(openFullscreenOnSelect = !it.openFullscreenOnSelect) } }
+                        "On Demand in Nuvio's Stream List",
+                        "Adds your provider's copy to the end of the stream list for movies and episodes. Auto-play never picks it.",
+                        s.onDemandInStreams,
+                        { update { it.copy(onDemandInStreams = !it.onDemandInStreams) } }
+                    )
+                    SubHeading("Browsing")
+                    SettingsToggleRow(
+                        "Merge Duplicates",
+                        "Shows each movie or series once, even when your provider lists several copies (other qualities, categories or providers). Play lets you pick the version.",
+                        s.vodMergeDuplicates,
+                        { update { it.copy(vodMergeDuplicates = !it.vodMergeDuplicates) } }
                     )
                     SettingsToggleRow(
-                        "Play last channel when Live TV opens",
+                        "Use Posters from My Addons",
+                        "Your addons' posters where they have the title. Off: the provider's images only.",
+                        s.onDemandAddonPosters,
+                        { update { it.copy(onDemandAddonPosters = !it.onDemandAddonPosters) } }
+                    )
+                    SettingsActionRow(
+                        "Show Hidden Categories", "Brings back every On Demand category you hid",
+                        "${user.vodHiddenCategories.size}", onClick = {
+                            confirm("Show hidden categories?", "Every On Demand category you hid comes back.", "Show") { viewModel.clearVodHidden() }
+                        }
+                    )
+                }
+            }
+
+            // ------------------------------------------------------------ Guide Layout
+            item(key = "layout") {
+                LiveSection(
+                    title = "Guide Layout",
+                    summary = "What the guide shows and how much fits",
+                    icon = Icons.Default.GridView,
+                    open = "layout" in open,
+                    onToggle = { toggle("layout") }
+                ) {
+                    SubHeading("Top of the Guide")
+                    SettingsToggleRow(
+                        "Show Info Panel",
+                        "The panel with the highlighted show's poster, title, time and description",
+                        s.showProgramDetails,
+                        { update { it.copy(showProgramDetails = !it.showProgramDetails) } }
+                    )
+                    SettingsToggleRow(
+                        "Show Preview Window",
+                        "The small video of the highlighted channel in the top-right corner",
+                        s.showPreview,
+                        { update { it.copy(showPreview = !it.showPreview) } }
+                    )
+                    SettingsToggleRow(
+                        "Smaller Info Panel & Preview",
+                        "Shrinks the top of the guide to about two-thirds of its height, so more channels fit",
+                        s.smallHeader,
+                        { update { it.copy(smallHeader = !it.smallHeader) } }
+                    )
+                    SettingsToggleRow(
+                        "Show Posters",
+                        "Posters for what's on, from your addons. Off: just the channel logo.",
+                        s.showPosters,
+                        { update { it.copy(showPosters = !it.showPosters) } }
+                    )
+                    SettingsToggleRow(
+                        "Show Playlist Name in Info Panel",
+                        "Which playlist the highlighted channel comes from",
+                        s.showPlaylistInInfo,
+                        { update { it.copy(showPlaylistInInfo = !it.showPlaylistInInfo) } }
+                    )
+                    SubHeading("Channel Rows")
+                    SettingsToggleRow(
+                        "Show Channel Names",
+                        "Off: just numbers and logos, which leaves more room for the schedule",
+                        s.showChannelNames,
+                        { update { it.copy(showChannelNames = !it.showChannelNames) } }
+                    )
+                    SettingsToggleRow(
+                        "Show Channel Numbers",
+                        "The number in front of each channel",
+                        s.showChannelNumbers,
+                        { update { it.copy(showChannelNumbers = !it.showChannelNumbers) } }
+                    )
+                    SettingsToggleRow(
+                        "Show Channel Logos",
+                        "The logo in front of each channel name",
+                        s.showChannelLogos,
+                        { update { it.copy(showChannelLogos = !it.showChannelLogos) } }
+                    )
+                    SettingsToggleRow(
+                        "Compact Rows",
+                        "Slimmer channel rows, so about two more channels fit",
+                        s.compactRows,
+                        { update { it.copy(compactRows = !it.compactRows) } }
+                    )
+                    SettingsToggleRow(
+                        "Show Times in the Guide",
+                        "Each show's start and end time under its title (rows get a little taller)",
+                        s.showProgramTimes,
+                        { update { it.copy(showProgramTimes = !it.showProgramTimes) } }
+                    )
+                    SettingsToggleRow(
+                        "Show the \"Now\" Line",
+                        "The line that marks the current time across the guide",
+                        s.showNowLine,
+                        { update { it.copy(showNowLine = !it.showNowLine) } }
+                    )
+                    SettingsToggleRow(
+                        "Quality Badges",
+                        "4K, FHD, HD or SD next to channels you've watched",
+                        s.showQualityBadges,
+                        { update { it.copy(showQualityBadges = !it.showQualityBadges) } }
+                    )
+                    SubHeading("Look")
+                    SettingsActionRow(
+                        title = "Highlight Style",
+                        subtitle = "How the selected show is marked: an outline, or filled with your theme color",
+                        value = if (s.solidHighlight) "Solid" else "Outline",
+                        onClick = { dialog = LiveDialog.HighlightChoice }
+                    )
+                    SettingsToggleRow(
+                        "24-Hour Clock",
+                        "Times like 20:30 instead of 8:30 PM",
+                        s.use24HourClock,
+                        { update { it.copy(use24HourClock = !it.use24HourClock) } }
+                    )
+                }
+            }
+
+            // ------------------------------------------------------------ Watching
+            item(key = "watching") {
+                LiveSection(
+                    title = "Watching",
+                    summary = "Opening Live TV, changing channels, picture & sound",
+                    icon = Icons.Default.PlayCircleFilled,
+                    open = "watching" in open,
+                    onToggle = { toggle("watching") }
+                ) {
+                    SubHeading("Opening Live TV")
+                    SettingsToggleRow(
+                        "Open on Last Group",
+                        "Live TV opens on the group you last watched a channel in",
+                        s.rememberLastGroup,
+                        { update { it.copy(rememberLastGroup = !it.rememberLastGroup) } }
+                    )
+                    SettingsToggleRow(
+                        "Play Last Channel in the Preview",
                         "Opening Live TV starts the channel you watched last in the preview window",
                         s.resumeLastInPreview,
                         { update { it.copy(resumeLastInPreview = !it.resumeLastInPreview) } }
                     )
                     SettingsToggleRow(
-                        "Start in full screen",
-                        "The first time you open Live TV after starting the app, your last channel plays in full screen",
+                        "Start in Full Screen",
+                        "The first time you open Live TV after starting the app, your last channel plays full screen",
                         s.autoPlayLastChannel,
                         { update { it.copy(autoPlayLastChannel = !it.autoPlayLastChannel) } }
                     )
+                    SubHeading("Moving Around")
+                    SettingsToggleRow(
+                        "OK Opens Full Screen",
+                        "OK on a show goes straight to full screen, instead of playing it in the preview first",
+                        s.openFullscreenOnSelect,
+                        { update { it.copy(openFullscreenOnSelect = !it.openFullscreenOnSelect) } }
+                    )
+                    SettingsToggleRow(
+                        "Land on Channel Names (Like a Cable Box)",
+                        "Picking a group lands on the channel names: Up and Down change channel, OK plays, Right shows the schedule, Left goes back to the groups",
+                        s.browseByChannelName,
+                        { update { it.copy(browseByChannelName = !it.browseByChannelName) } }
+                    )
+                    SettingsToggleRow(
+                        "Overlay Mode",
+                        "Left while watching shows channels and schedules over the video. Off: Left goes back to the guide.",
+                        s.overlayMode,
+                        { update { it.copy(overlayMode = !it.overlayMode) } }
+                    )
                     SettingsActionRow(
-                        title = "Channel up / down switches within",
-                        subtitle = "Which channels Up and Down (or CH+ and CH−) move through while watching",
+                        title = "Channel Up / Down Moves Within",
+                        subtitle = "Which channels Up and Down (or CH+ and CH−) step through while watching",
                         value = if (s.zapMode == ZapMode.GROUP) "Current group" else "All channels",
                         onClick = { dialog = LiveDialog.ZapModeChoice }
                     )
                     SettingsToggleRow(
-                        "Reverse channel up / down",
+                        "Reverse Channel Up / Down",
                         "Up goes to the previous channel instead of the next one",
                         s.reverseZap,
                         { update { it.copy(reverseZap = !it.reverseZap) } }
                     )
                     SettingsActionRow(
-                        title = "Info bar time",
+                        title = "Info Bar Stays For",
                         subtitle = "How long the show info stays on screen after changing channel or pressing OK",
                         value = "${s.infoBannerSeconds} seconds",
                         onClick = { dialog = LiveDialog.BannerTime }
                     )
+                    SubHeading("Picture & Sound")
                     SettingsToggleRow(
-                        "Prefer m3u8 for catch-up (enables scrubbing)",
-                        "Asks Xtream providers for HLS catch-up first, so replays have a working seek bar. Falls back to TS if the provider doesn't offer it.",
-                        s.catchupPreferHls,
-                        { update { it.copy(catchupPreferHls = !it.catchupPreferHls) } }
-                    )
-                    SettingsToggleRow(
-                        "Closed captions on by default",
-                        "Turns captions on automatically when a channel has them. You can still switch them off with CC.",
+                        "Captions On by Default",
+                        "Turns captions on when a channel has them. You can still switch them off with CC.",
                         s.captionsByDefault,
                         { update { it.copy(captionsByDefault = !it.captionsByDefault) } }
                     )
                     SettingsToggleRow(
-                        "Pause and rewind live TV",
-                        "On channels without catch-up, pausing records the channel to this device, so play carries on from where you paused",
+                        "Audio Passthrough",
+                        "Sends Dolby audio untouched to your TV or speaker. Turn off if sound cuts out, especially with Echo speakers or Alexa Home Theater on Fire TV.",
+                        s.audioPassthrough,
+                        { update { it.copy(audioPassthrough = !it.audioPassthrough) } }
+                    )
+                    SettingsToggleRow(
+                        "Match Frame Rate",
+                        "Switches the TV to the video's frame rate (for example 50 Hz for UK and European channels) for smoother motion, on TVs that support it",
+                        s.matchFrameRate,
+                        { update { it.copy(matchFrameRate = !it.matchFrameRate) } }
+                    )
+                    SubHeading("Pause & Catch-Up")
+                    SettingsToggleRow(
+                        "Pause and Rewind Live TV",
+                        "On channels without catch-up, pausing records the channel to this device, so it carries on from where you paused",
                         s.timeshiftEnabled,
                         { update { it.copy(timeshiftEnabled = !it.timeshiftEnabled) } }
                     )
                     if (s.timeshiftEnabled) SettingsActionRow(
-                        title = "Keep up to",
+                        title = "Keep Up To",
                         subtitle = "How much can be recorded while paused (uses this device's storage, deleted afterwards)",
                         value = "${s.timeshiftMinutes} min · about " + (s.timeshiftMinutes * 35).let { mb -> if (mb >= 1000) String.format(java.util.Locale.US, "%.1f GB", mb / 1024f) else "$mb MB" },
                         onClick = {
                             update { st -> st.copy(timeshiftMinutes = when (st.timeshiftMinutes) { 10 -> 30; 30 -> 60; else -> 10 }) }
                         }
                     )
+                    SettingsToggleRow(
+                        "Prefer HLS for Catch-Up",
+                        "Asks Xtream providers for replays in HLS (m3u8) first, so the seek bar works. Falls back to TS if the provider doesn't offer it.",
+                        s.catchupPreferHls,
+                        { update { it.copy(catchupPreferHls = !it.catchupPreferHls) } }
+                    )
+                    SubHeading("Connection")
                     SettingsActionRow(
-                        title = "Buffer size",
+                        title = "Buffer Size",
                         subtitle = "Larger rides out a slow connection or provider (fewer pauses); smaller changes channels a little faster",
                         value = when (s.bufferSize) { "small" -> "Small"; "large" -> "Large"; "xlarge" -> "Extra large"; else -> "Normal" },
                         onClick = {
@@ -524,19 +726,7 @@ fun LiveTvSettingsContent(
                         }
                     )
                     SettingsToggleRow(
-                        "Audio passthrough",
-                        "Sends Dolby audio untouched to your TV or speaker. Turn off if sound cuts out or stops, especially with Echo speakers or Alexa Home Theater on Fire TV.",
-                        s.audioPassthrough,
-                        { update { it.copy(audioPassthrough = !it.audioPassthrough) } }
-                    )
-                    SettingsToggleRow(
-                        "Match frame rate",
-                        "Switches the TV to the video's frame rate (for example 50 Hz for UK and European channels) for smoother motion. Only on TVs that support it.",
-                        s.matchFrameRate,
-                        { update { it.copy(matchFrameRate = !it.matchFrameRate) } }
-                    )
-                    SettingsToggleRow(
-                        "Reconnect automatically",
+                        "Reconnect Automatically",
                         "Tries the stream again by itself if it drops or freezes",
                         s.autoReconnect,
                         { update { it.copy(autoReconnect = !it.autoReconnect) } }
@@ -544,46 +734,56 @@ fun LiveTvSettingsContent(
                 }
             }
 
-            // ------------------------------------------------------------ guide data
-            item(key = "guide_data") {
-                SettingsGroupCard(title = "Guide data", subtitle = "How often listings update, how far they reach, and timing fixes") {
+            // ------------------------------------------------------------ Guide Listings
+            item(key = "listings") {
+                LiveSection(
+                    title = "Guide Listings",
+                    summary = "How far the guide reaches, timing fixes",
+                    icon = Icons.Default.Schedule,
+                    open = "listings" in open,
+                    onToggle = { toggle("listings") }
+                ) {
                     SettingsActionRow(
-                        "Update playlists every", "How often channel lists are downloaded again from your providers",
-                        hoursLabel(s.playlistRefreshHours), onClick = { dialog = LiveDialog.PlaylistRefresh }
-                    )
-                    SettingsActionRow(
-                        "Update guides every", "How often TV listings are downloaded again",
-                        hoursLabel(s.epgRefreshHours), onClick = { dialog = LiveDialog.EpgRefresh }
-                    )
-                    val clearContext = androidx.compose.ui.platform.LocalContext.current
-                    SettingsActionRow(
-                        "Clear posters and show info",
-                        "Forgets the posters and show info found for Live TV, so they're fetched fresh from your addons next time",
-                        onClick = {
-                            viewModel.clearPosterData()
-                            android.widget.Toast.makeText(clearContext, "Posters and show info cleared", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    )
-                    SettingsActionRow(
-                        "Days of listings ahead", "How far into the future the guide keeps shows",
+                        "Days Ahead", "How far into the future the guide keeps shows",
                         if (s.epgFutureDays == 1) "1 day" else "${s.epgFutureDays} days", onClick = { dialog = LiveDialog.FutureDays }
                     )
                     SettingsActionRow(
-                        "Past listings kept", "How far back the guide keeps shows, for catch-up",
+                        "Past Shows Kept", "How far back the guide keeps shows, for catch-up",
                         hoursLabel(s.epgPastHours), onClick = { dialog = LiveDialog.PastHours }
                     )
                     SettingsActionRow(
-                        title = "Guide time shift",
+                        title = "Guide Time Shift",
                         subtitle = "Moves all listings earlier or later, for a guide that's out of step with what's playing",
                         value = offsetLabel(s.epgOffsetMinutes),
                         onClick = { dialog = LiveDialog.EpgShift }
                     )
+                    val clearContext = androidx.compose.ui.platform.LocalContext.current
+                    SettingsActionRow(
+                        "Clear Posters and Show Info",
+                        "Forgets the posters and show info found for Live TV, so they're looked up fresh from your addons",
+                        onClick = {
+                            confirm(
+                                "Clear posters and show info?",
+                                "Live TV forgets every poster and show description it found. They're looked up again from your addons as you browse.",
+                                "Clear"
+                            ) {
+                                viewModel.clearPosterData()
+                                android.widget.Toast.makeText(clearContext, "Posters and show info cleared", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
                 }
             }
 
-            // ------------------------------------------------------------ Nuvio
+            // ------------------------------------------------------------ Home Screen & Nuvio
             item(key = "nuvio") {
-                SettingsGroupCard(title = "In the rest of Nuvio") {
+                LiveSection(
+                    title = "Home Screen & Nuvio",
+                    summary = "The Live TV row, menu and search",
+                    icon = Icons.Default.Home,
+                    open = "nuvio" in open,
+                    onToggle = { toggle("nuvio") }
+                ) {
                     // ---- Live TV row on the home screen
                     // On or off for the Nuvio profile in use (each profile has its own choice).
                     val homeProfileContext = androidx.compose.ui.platform.LocalContext.current
@@ -593,8 +793,9 @@ fun LiveTvSettingsContent(
                         ).profileManager()
                     }.activeProfileId.collectAsStateWithLifecycle()
                     val homeRowOn = homeProfileId !in s.homeRowHiddenProfiles
+                    SubHeading("Home Screen Row")
                     SettingsToggleRow(
-                        "Live TV row on the home screen",
+                        "Live TV Row on the Home Screen",
                         "For this profile. Tucked above your top row: press Up to show it.",
                         homeRowOn,
                         {
@@ -608,8 +809,8 @@ fun LiveTvSettingsContent(
                     )
                     if (homeRowOn) {
                         SettingsActionRow(
-                            title = "Home row shows",
-                            subtitle = "Favorites, Recently watched, or one of your own groups",
+                            title = "Row Shows",
+                            subtitle = "Favorites, Recently Watched, or one of your own groups",
                             value = when (s.homeRowSource) {
                                 "favorites", "" -> "Favorites"
                                 "recent" -> "Recently watched"
@@ -618,13 +819,13 @@ fun LiveTvSettingsContent(
                             onClick = { dialog = LiveDialog.HomeRowSource }
                         )
                         SettingsActionRow(
-                            title = "Home row title",
+                            title = "Row Title",
                             subtitle = "The name shown above the row",
                             value = s.homeRowTitle.ifBlank { "Live TV" },
                             onClick = { dialog = LiveDialog.HomeRowTitle }
                         )
                         SettingsActionRow(
-                            title = "Home row order",
+                            title = "Row Order",
                             subtitle = "Your order, channel number, or the shows ending soonest first",
                             value = when (s.homeRowSort) { "number" -> "Channel number"; "ending" -> "Ending soonest"; else -> "Your order" },
                             onClick = {
@@ -632,7 +833,7 @@ fun LiveTvSettingsContent(
                             }
                         )
                         SettingsActionRow(
-                            title = "Home row channels",
+                            title = "Channels in the Row",
                             subtitle = "How many channels the row shows",
                             value = if (s.homeRowLimit == 0) "All" else "${s.homeRowLimit}",
                             onClick = {
@@ -640,106 +841,61 @@ fun LiveTvSettingsContent(
                             }
                         )
                         SettingsToggleRow(
-                            "Hide channels with no listings",
+                            "Hide Channels with No Listings",
                             "Leaves out channels showing only \"Programming\" or no information",
                             s.homeRowHidePlaceholders,
                             { update { it.copy(homeRowHidePlaceholders = !it.homeRowHidePlaceholders) } }
                         )
                         SettingsToggleRow(
-                            "OK opens the guide",
-                            "Off: OK plays the channel full screen. On: opens the Live TV guide with the channel playing.",
+                            "OK Opens the Guide",
+                            "Off: OK plays the channel full screen. On: opens the guide with the channel playing.",
                             s.homeRowOpensGuide,
                             { update { it.copy(homeRowOpensGuide = !it.homeRowOpensGuide) } }
                         )
                         SettingsToggleRow(
-                            "Show what's next",
+                            "Show What's Next",
                             "A \"Next: 9:00 The News\" line on each card",
                             s.homeRowShowNext,
                             { update { it.copy(homeRowShowNext = !it.homeRowShowNext) } }
                         )
                         SettingsToggleRow(
-                            "Compact cards",
+                            "Compact Cards",
                             "Just the logo and the show name",
                             s.homeRowCompact,
                             { update { it.copy(homeRowCompact = !it.homeRowCompact) } }
                         )
                     }
+                    SubHeading("Menu & Search")
                     SettingsToggleRow(
-                        "Hide from side menu",
-                        "Removes Live TV from Nuvio's main menu. You can still reach it from Settings.",
-                        !s.showInSidebar,
+                        "Show Live TV in the Side Menu",
+                        "Off: Live TV leaves Nuvio's main menu. You can still reach it from Settings.",
+                        s.showInSidebar,
                         { update { it.copy(showInSidebar = !it.showInSidebar) } }
                     )
                     SettingsToggleRow(
-                        "Hide from Nuvio search",
-                        "Stops channels and TV shows from appearing in Nuvio's search results",
-                        !s.showInSearch,
+                        "Show Channels in Nuvio Search",
+                        "Channels and TV shows appear in Nuvio's search results",
+                        s.showInSearch,
                         { update { it.copy(showInSearch = !it.showInSearch) } }
                     )
                 }
             }
 
-            // ------------------------------------------------------------ On Demand
-            item(key = "on_demand") {
-                SettingsGroupCard(
-                    title = "On Demand",
-                    subtitle = "Movies and series from Xtream logins with \"Include movies & series\" on. Change it per login under Playlists → Edit."
-                ) {
-                    if (onDemandStatus.loading) LoadingLine(onDemandStatus.message ?: "Importing movies and series…")
-                    val genreProgress by viewModel.onDemand.genreProgress.collectAsStateWithLifecycle()
-                    genreProgress?.let { LoadingLine(it) }
-                    SettingsActionRow(
-                        "Update movies & series now",
-                        onDemandStatus.message ?: if (onDemandHas) "Imported. Updates once a day by itself." else "Nothing imported yet",
-                        onClick = { viewModel.onDemand.refreshNow() }
-                    )
-                    // One switch per Xtream login (logins added before On Demand start switched off).
-                    playlists.filter { it.isXtream }.forEach { pl ->
-                        SettingsToggleRow(
-                            "Movies & series from ${pl.name}",
-                            if (pl.importVod) "Included" else "Not included. Switch on to import this provider's movies and series.",
-                            pl.importVod,
-                            { viewModel.savePlaylist(pl.copy(importVod = !pl.importVod)) }
-                        )
-                    }
-                    SettingsToggleRow(
-                        "On Demand in Nuvio's stream list",
-                        "Adds your provider's copy to the end of Nuvio's stream list for movies and episodes. Auto-play never picks it.",
-                        s.onDemandInStreams,
-                        { update { it.copy(onDemandInStreams = !it.onDemandInStreams) } }
-                    )
-                    SettingsToggleRow(
-                        "Merge duplicates",
-                        "Shows each movie or series once, even when your provider lists several copies (other qualities, categories or providers). Play lets you pick the version.",
-                        s.vodMergeDuplicates,
-                        { update { it.copy(vodMergeDuplicates = !it.vodMergeDuplicates) } }
-                    )
-                    SettingsToggleRow(
-                        "Use posters from my addons",
-                        "Shows your addons' posters in On Demand where they have the title. Off: the provider's images only.",
-                        s.onDemandAddonPosters,
-                        { update { it.copy(onDemandAddonPosters = !it.onDemandAddonPosters) } }
-                    )
-                    SettingsToggleRow(
-                        "Show On Demand in the side menu",
-                        "Only appears when a provider's movies or series are imported",
-                        s.onDemandInSidebar,
-                        { update { it.copy(onDemandInSidebar = !it.onDemandInSidebar) } }
-                    )
-                    SettingsActionRow(
-                        "Show hidden categories", "Brings back every On Demand category you hid",
-                        "${user.vodHiddenCategories.size}", onClick = { viewModel.clearVodHidden() }
-                    )
-                }
-            }
-
-            // ------------------------------------------------------------ parental controls
+            // ------------------------------------------------------------ Parental Controls
             item(key = "parental") {
-                SettingsGroupCard(
-                    title = "Parental controls",
-                    subtitle = "Locked groups and categories need the PIN to open, and stay out of All channels and search until unlocked."
+                LiveSection(
+                    title = "Parental Controls",
+                    summary = if (hasPin) "On · ${user.lockedGroups.size} locked" else "Off",
+                    icon = Icons.Default.Lock,
+                    open = "parental" in open,
+                    onToggle = { toggle("parental") }
                 ) {
-                    val hasPin = s.parentalPin.length >= 4
+                    Text(
+                        text = "Locked groups and categories need the PIN to open, and stay out of All Channels and search until unlocked.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NuvioTheme.colors.TextSecondary,
+                        modifier = Modifier.padding(horizontal = NuvioTheme.spacing.lg, vertical = NuvioTheme.spacing.xs)
+                    )
                     SettingsActionRow(
                         if (hasPin) "Change PIN" else "Set a PIN",
                         if (hasPin) "Parental controls are on" else "Turns parental controls on",
@@ -747,13 +903,13 @@ fun LiveTvSettingsContent(
                     )
                     if (hasPin) {
                         SettingsToggleRow(
-                            "Lock adult content automatically",
+                            "Lock Adult Content Automatically",
                             "Locks groups and categories with names like Adult, XXX or 18+",
                             s.lockAdultContent,
                             { update { it.copy(lockAdultContent = !it.lockAdultContent) } }
                         )
                         SettingsActionRow(
-                            "Turn off parental controls", "Removes the PIN. Your locked groups are remembered.",
+                            "Turn Off Parental Controls", "Removes the PIN. Your locked groups are remembered.",
                             "${user.lockedGroups.size} locked",
                             onClick = { pinWrong = false; dialog = LiveDialog.PinRemove }
                         )
@@ -761,11 +917,17 @@ fun LiveTvSettingsContent(
                 }
             }
 
-            // ------------------------------------------------------------ reminders
+            // ------------------------------------------------------------ Reminders
             item(key = "reminders") {
-                SettingsGroupCard(title = "Reminders") {
+                LiveSection(
+                    title = "Reminders",
+                    summary = if (user.reminders.isEmpty()) "None set" else "${user.reminders.size} upcoming",
+                    icon = Icons.Default.Notifications,
+                    open = "reminders" in open,
+                    onToggle = { toggle("reminders") }
+                ) {
                     SettingsActionRow(
-                        "Upcoming reminders",
+                        "Upcoming Reminders",
                         "Set from a show's info in the guide. You get a message a minute before it starts.",
                         "${user.reminders.size}",
                         onClick = { dialog = LiveDialog.Reminders }
@@ -773,49 +935,41 @@ fun LiveTvSettingsContent(
                 }
             }
 
-            // ------------------------------------------------------------ help
+            // ------------------------------------------------------------ Help
             item(key = "help") {
                 val crashContext = androidx.compose.ui.platform.LocalContext.current
-                SettingsGroupCard(title = "Help") {
+                LiveSection(
+                    title = "Help",
+                    summary = "Crash report · Start-up report",
+                    icon = Icons.AutoMirrored.Filled.Help,
+                    open = "help" in open,
+                    onToggle = { toggle("help") }
+                ) {
                     SettingsActionRow(
-                        "Crash report",
+                        "Crash Report",
                         "The last time the app crashed, froze or was closed. Scan the code with your phone to send it.",
                         onClick = { com.nuvio.tv.livetv.crash.CrashCatcher.openLastReport(crashContext) }
                     )
-                }
-            }
-
-            // ------------------------------------------------------------ channel management
-            item(key = "channels") {
-                SettingsGroupCard(
-                    title = "Your channel changes",
-                    subtitle = "Tip: long-press a channel in the guide to rename, renumber, hide or favorite it. Long-press a group to rename, move or hide it."
-                ) {
-                    SettingsActionRow("Hidden channels", "Channels you hid. Select one to show it again.", "${user.hiddenChannels.size}", leadingIcon = Icons.Default.VisibilityOff, onClick = { dialog = LiveDialog.HiddenChannels })
-                    SettingsActionRow("Hidden groups", "Groups you hid. Select one to show it again.", "${user.hiddenGroups.size}", leadingIcon = Icons.Default.VisibilityOff, onClick = { dialog = LiveDialog.HiddenGroups })
-                    SettingsActionRow("My groups", "Groups you created. Select one to delete it.", "${user.customGroups.size}", onClick = { dialog = LiveDialog.CustomGroups })
-                    SettingsActionRow("Clear favorites", "Removes every channel from Favorites", "${user.favorites.size}", onClick = { viewModel.clearFavorites() })
-                    SettingsActionRow("Clear recently watched", "Empties the Recently watched group", "${user.recent.size}", onClick = { viewModel.clearRecent() })
                     SettingsActionRow(
-                        "Reset channel names and numbers", "Puts back the names and numbers from your playlist",
-                        "${(user.channelNames.keys + user.channelNumbers.keys).size}",
-                        onClick = { viewModel.resetChannelEdits() }
+                        "Start-Up Report",
+                        "What Live TV did while loading this time, how long it took, and anything that failed",
+                        onClick = { dialog = LiveDialog.LoadReport }
                     )
-                    SettingsActionRow("Reset group names and order", "Puts back the group names and order from your playlist", onClick = { viewModel.resetGroupEdits() })
-                    SettingsActionRow(
-                        "Reset channel order", "Undoes \"Reorder channels\" in every group",
-                        "${user.channelOrder.size}", onClick = { viewModel.resetChannelOrder() }
-                    )
-                    SettingsActionRow(
-                        "Remove copied channels", "Takes out every channel you copied into another group. The originals stay.",
-                        "${user.channelCopies.values.sumOf { it.size }}", onClick = { viewModel.clearChannelCopies() }
-                    )
-                    SettingsActionRow(
-                        "Reset EPG assignments",
-                        "Channels you assigned a guide to go back to automatic matching",
-                        "${user.epgOverrides.size}",
-                        onClick = { viewModel.resetEpgAssignments() }
-                    )
+                    // Hidden developer tools: only shown after typing the secret word into the
+                    // channel name cleanup (see NameEditor below).
+                    if (developerToolsOn) {
+                        SubHeading("Developer Tools")
+                        SettingsActionRow(
+                            "Test Poster Lookup",
+                            "What your addons return for a title",
+                            onClick = { dialog = LiveDialog.PosterTest }
+                        )
+                        SettingsActionRow(
+                            "Remote Button Tester",
+                            "Shows every button the remote sends",
+                            onClick = { dialog = LiveDialog.ButtonTester }
+                        )
+                    }
                 }
             }
         }
@@ -1051,6 +1205,13 @@ fun LiveTvSettingsContent(
             }.ifEmpty { listOf("Close" to close) },
             onDismiss = close
         )
+        is LiveDialog.Confirm -> ConfirmDeleteDialog(
+            title = d.title,
+            message = d.message,
+            onDismiss = close,
+            onConfirm = { d.action(); close() },
+            confirmLabel = d.label
+        )
         LiveDialog.ConfirmRestore -> ConfirmDeleteDialog(
             title = "Restore from Google Drive?",
             message = "This TV's Live TV setup (playlists, guides, favorites and settings) is replaced with the copy in your Google Drive.",
@@ -1214,15 +1375,15 @@ private fun DriveSyncCard(
         state.lastSyncMs > 0 -> "On · last synced " + DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(state.lastSyncMs))
         else -> "On"
     }
-    SettingsGroupCard(title = "Backup & sync") {
-        SettingsActionRow(
-            title = "Google Drive sync",
-            subtitle = if (expanded) "Keeps your Live TV setup the same on every TV, using your own Google Drive" else status,
-            value = if (expanded) "Hide" else if (state.connected) "On" else "Off",
-            onClick = onToggleExpanded,
-            modifier = modifier
-        )
-        if (expanded) {
+    LiveSection(
+        title = "Backup & Sync",
+        summary = "Google Drive · " + status,
+        icon = Icons.Default.Backup,
+        open = expanded,
+        onToggle = onToggleExpanded,
+        modifier = modifier
+    ) {
+        run {
             when {
                 !state.available -> Text(
                     text = "Google Drive sync needs to be set up by whoever builds this app.",
@@ -1235,17 +1396,17 @@ private fun DriveSyncCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = NuvioTheme.colors.TextSecondary
                     )
-                    SettingsActionRow("Connect Google Drive", "Sign in with a code on your phone", onClick = onConnect)
+                    SettingsActionRow("Connect Google Drive", "Keeps your Live TV setup the same on every TV, using your own Google Drive. Sign in with a code on your phone.", onClick = onConnect)
                 }
                 else -> {
                     SettingsActionRow("Account", "The Google account your Live TV setup is saved to", state.email ?: "Connected", onClick = {})
                     SettingsToggleRow(
-                        "Sync automatically",
+                        "Sync Automatically",
                         "Back up changes, and pick up changes made on your other TVs",
                         state.autoSync,
                         { onAutoSync(!state.autoSync) }
                     )
-                    SettingsActionRow("Back up now", "Save this TV's setup to Google Drive", onClick = onBackUp)
+                    SettingsActionRow("Back Up Now", "Save this TV's setup to Google Drive", onClick = onBackUp)
                     SettingsActionRow("Restore from Google Drive", "Replace this TV's setup with the saved copy", onClick = onRestore)
                     SettingsActionRow("Disconnect", "Stop syncing on this TV (your backup stays in Drive)", onClick = onDisconnect)
                 }
@@ -1513,4 +1674,42 @@ private fun UnhideDialog(
             }
         }
     }
+}
+
+/**
+ * One folding section of Live TV settings, in Nuvio's own settings style: a header row with the
+ * section's icon, name and a one-line summary; OK opens or closes it.
+ */
+@Composable
+private fun LiveSection(
+    title: String,
+    summary: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    open: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
+) {
+    SettingsGroupCard {
+        SettingsActionRow(
+            title = title,
+            subtitle = summary,
+            leadingIcon = icon,
+            trailingIcon = if (open) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            onClick = onToggle,
+            modifier = modifier
+        )
+        if (open) content()
+    }
+}
+
+/** A small label inside an open section ("Top of the Guide"), like Nuvio's group titles. */
+@Composable
+private fun SubHeading(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = NuvioTheme.colors.TextTertiary,
+        modifier = Modifier.padding(start = NuvioTheme.spacing.lg, top = NuvioTheme.spacing.sm, bottom = NuvioTheme.spacing.xxs)
+    )
 }

@@ -228,7 +228,7 @@ private fun LiveSearchCard(
     onLongClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(liveCorner())
     val colors = liveCellColors(focused = focused, idle = guideSurface())
     val now = System.currentTimeMillis()
     val p = hit.program

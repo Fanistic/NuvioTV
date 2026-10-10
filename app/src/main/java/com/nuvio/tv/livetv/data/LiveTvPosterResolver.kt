@@ -195,6 +195,16 @@ class LiveTvPosterResolver @Inject constructor(
             cache[key] = Result(poster)
             return poster
         }
+        // Fetching ahead (the rest of the group): runs as part of the caller, so it stops the
+        // moment you move on to another group. It used to carry on by itself, so scrolling
+        // through many groups queued hundreds of searches that kept the box busy for minutes,
+        // even in full screen, and the video turned into a slide show.
+        if (!urgent) {
+            inFlightUrgent[key]?.let { return runCatching { it.await() }.getOrNull() }
+            return withContext(Urgency(false)) {
+                permits.withPermit { resolve(programTitle, query, hint, clues, key) }
+            }
+        }
         // One lookup per title at a time. Started only after it's registered, so a finished
         // lookup can never be left behind and answer "no poster" forever.
         // The show you're looking at gets its own lookup in the fast lane, even if a slower

@@ -401,7 +401,7 @@ private fun HomeCard(
 ) {
     var focused by remember { mutableStateOf(false) }
     val colors = liveCellColors(focused = focused, idle = NuvioTheme.colors.BackgroundElevated)
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(com.nuvio.tv.livetv.ui.liveCorner())
     val p = entry.now
     Row(
         modifier = modifier

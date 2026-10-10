@@ -45,6 +45,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -217,9 +219,13 @@ internal fun ChannelLogo(url: String?, size: Dp, modifier: Modifier = Modifier) 
         contentAlignment = Alignment.Center
     ) {
         if (!url.isNullOrBlank()) {
-            // A plain (not hardware) picture, so its colors can be checked once.
-            val request = remember(url) {
-                coil3.request.ImageRequest.Builder(context).data(url).allowHardware(false).build()
+            // A plain (not hardware) picture only the first time, so its colors can be checked
+            // once. After that the normal (hardware) kind: plain pictures for every logo filled
+            // the app's memory as you scrolled, and the clean-ups that followed made the video
+            // stutter.
+            val known = darkLogos.containsKey(url)
+            val request = remember(url, known) {
+                coil3.request.ImageRequest.Builder(context).data(url).allowHardware(known).build()
             }
             AsyncImage(
                 model = request,
@@ -487,3 +493,41 @@ internal fun aboutLine(m: com.nuvio.tv.domain.model.MetaPreview): String =
         m.genres.take(2).joinToString(", ").takeIf { it.isNotBlank() },
         m.imdbRating?.let { "★ " + String.format(java.util.Locale.US, "%.1f", it) }
     ).joinToString("  ·  ")
+
+// ---------------------------------------------------------------- corner rounding
+
+@dagger.hilt.EntryPoint
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+internal interface LiveCornerEntryPoint {
+    fun layoutPreferences(): com.nuvio.tv.data.local.LayoutPreferenceDataStore
+}
+
+/**
+ * Nuvio's poster corner setting (Settings › Layout), followed by Live TV's tiles, posters and
+ * preview so they're rounded the same as the posters on the home screen. Per profile, like
+ * Nuvio's own setting.
+ */
+internal object LiveCorners {
+    private val _radius = kotlinx.coroutines.flow.MutableStateFlow(12)
+    val radius: kotlinx.coroutines.flow.StateFlow<Int> = _radius
+    @Volatile private var started = false
+
+    fun start(context: android.content.Context) {
+        if (started) return
+        started = true
+        val entry = runCatching {
+            dagger.hilt.android.EntryPointAccessors.fromApplication(context.applicationContext, LiveCornerEntryPoint::class.java)
+        }.getOrNull() ?: return
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO).launch {
+            runCatching { entry.layoutPreferences().posterCardCornerRadiusDp.collect { _radius.value = it.coerceIn(0, 40) } }
+        }
+    }
+}
+
+/** The corner rounding for Live TV's cards and tiles (the same as Nuvio's posters). */
+@Composable
+internal fun liveCorner(): androidx.compose.ui.unit.Dp {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.remember { LiveCorners.start(context) }
+    return LiveCorners.radius.collectAsState().value.dp
+}

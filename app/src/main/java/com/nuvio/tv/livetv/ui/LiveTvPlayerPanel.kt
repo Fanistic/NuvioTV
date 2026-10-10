@@ -129,7 +129,7 @@ internal fun LiveTvPlayerPanel(
         verticalAlignment = Alignment.Bottom
     ) {
         // Poster (or the channel logo when posters are off or there isn't one).
-        val posterShape = RoundedCornerShape(12.dp)
+        val posterShape = RoundedCornerShape(liveCorner())
         Box(
             modifier = Modifier
                 .width(if (showPosters) posterW else 72.dp)

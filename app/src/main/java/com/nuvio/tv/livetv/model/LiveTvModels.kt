@@ -174,6 +174,8 @@ data class LiveTvSettings(
     val showFavoritesGroup: Boolean = true,
     val showRecentGroup: Boolean = true,
     val compactRows: Boolean = false,
+    /** Each show's start and end time under its title in the guide (taller rows). */
+    val showProgramTimes: Boolean = false,
     val epgOffsetMinutes: Int = 0,
     val reverseZap: Boolean = false,
     val zapMode: ZapMode = ZapMode.GROUP,

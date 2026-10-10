@@ -553,6 +553,28 @@ class LiveTvPlaybackController @Inject constructor(
             .apply {
                 playWhenReady = true
                 addListener(listener)
+                // Choppy video ("slide show"): how many frames the box couldn't show in time,
+                // in the start-up report, so we can see when it starts and what was going on.
+                addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+                    private var droppedTotal = 0L
+                    private var lastReportAt = 0L
+                    override fun onDroppedVideoFrames(
+                        eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                        droppedFrames: Int,
+                        elapsedMs: Long
+                    ) {
+                        droppedTotal += droppedFrames
+                        val now = System.currentTimeMillis()
+                        if (droppedFrames >= 10 && now - lastReportAt > 30_000) {
+                            lastReportAt = now
+                            val rt = Runtime.getRuntime()
+                            val usedMb = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)
+                            com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+                                "Video dropped $droppedFrames frames in ${elapsedMs / 1000}s ($droppedTotal so far; app memory ${usedMb} of ${rt.maxMemory() / (1024 * 1024)} MB)"
+                            )
+                        }
+                    }
+                })
             }
     }
 

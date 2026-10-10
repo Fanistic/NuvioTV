@@ -692,7 +692,7 @@ private fun InfoBanner(
                 modifier = Modifier
                     .width(124.dp)
                     .height(186.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(liveCorner()))
                     .background(guideSurface()),
                 contentAlignment = Alignment.Center
             ) {

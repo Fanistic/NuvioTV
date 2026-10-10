@@ -65,6 +65,7 @@ class LiveTvPreferences @Inject constructor(
         val showFavGroup = booleanPreferencesKey("show_favorites_group")
         val showRecentGroup = booleanPreferencesKey("show_recent_group")
         val compactRows = booleanPreferencesKey("compact_rows")
+        val showProgramTimes = booleanPreferencesKey("show_program_times")
         val epgOffset = intPreferencesKey("epg_offset_minutes")
         val reverseZap = booleanPreferencesKey("reverse_zap")
         val zapMode = stringPreferencesKey("zap_mode")
@@ -235,6 +236,7 @@ class LiveTvPreferences @Inject constructor(
             showFavoritesGroup = p[Keys.showFavGroup] ?: d.showFavoritesGroup,
             showRecentGroup = p[Keys.showRecentGroup] ?: d.showRecentGroup,
             compactRows = p[Keys.compactRows] ?: d.compactRows,
+            showProgramTimes = p[Keys.showProgramTimes] ?: d.showProgramTimes,
             epgOffsetMinutes = p[Keys.epgOffset] ?: d.epgOffsetMinutes,
             reverseZap = p[Keys.reverseZap] ?: d.reverseZap,
             zapMode = p[Keys.zapMode]?.let { runCatching { ZapMode.valueOf(it) }.getOrNull() } ?: d.zapMode,
@@ -360,6 +362,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.showFavGroup] = s.showFavoritesGroup
         p[Keys.showRecentGroup] = s.showRecentGroup
         p[Keys.compactRows] = s.compactRows
+        p[Keys.showProgramTimes] = s.showProgramTimes
         p[Keys.epgOffset] = s.epgOffsetMinutes
         p[Keys.reverseZap] = s.reverseZap
         p[Keys.zapMode] = s.zapMode.name
