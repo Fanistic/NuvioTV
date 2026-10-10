@@ -180,7 +180,13 @@ class LiveTvViewModel @Inject constructor(
         s: LiveTvSettings,
         groupIdRaw: String?,
         query: String,
-        hasSrc: Boolean
+        hasSrc: Boolean,
+        /**
+         * Home row: the asked-for group or nothing. Favorites / Recently watched work even when
+         * hidden from the guide's group list, and a group that's gone shows no channels instead
+         * of falling back to All channels (thousands of cards on the home screen).
+         */
+        exactGroup: Boolean = false
     ): LiveTvUiState {
         val shown = channels.filter { it.key !in user.hiddenChannels && it.groupId !in user.hiddenGroups }
         // Parental controls: channels in locked groups stay out of every list until unlocked.
@@ -269,7 +275,7 @@ class LiveTvViewModel @Inject constructor(
             s.showFavoritesGroup -> ChannelGroup.FAVORITES
             else -> ChannelGroup.ALL
         }
-        val groupId = groupIdRaw?.takeIf { id -> groups.any { it.id == id } } ?: defaultGroupId
+        val groupId = if (exactGroup) groupIdRaw ?: "" else groupIdRaw?.takeIf { id -> groups.any { it.id == id } } ?: defaultGroupId
         val rawList = when {
             groupId == ChannelGroup.ALL && s.showAllChannelsGroup -> ordered(ChannelGroup.ALL, visible)
             // "Playlist order" keeps your own order here; Number / Name sort these too.
@@ -579,7 +585,14 @@ class LiveTvViewModel @Inject constructor(
     fun moveFavorite(channel: LiveChannel, delta: Int) = viewModelScope.launch { prefs.moveFavorite(channel.key, delta) }
     fun hideChannel(channel: LiveChannel) = viewModelScope.launch { prefs.setChannelHidden(channel.key, true) }
     fun hideGroup(groupId: String) = viewModelScope.launch {
-        prefs.setGroupHidden(groupId, true)
+        // Favorites, Recently watched and All channels are switched off in the settings rather
+        // than hidden like a playlist group (hiding them that way did nothing).
+        when (groupId) {
+            ChannelGroup.FAVORITES -> prefs.updateSettings { it.copy(showFavoritesGroup = false) }
+            ChannelGroup.RECENT -> prefs.updateSettings { it.copy(showRecentGroup = false) }
+            ChannelGroup.ALL -> prefs.updateSettings { it.copy(showAllChannelsGroup = false) }
+            else -> prefs.setGroupHidden(groupId, true)
+        }
         if (session.currentGroupId.value == groupId) selectGroup(uiState.value.defaultGroupId)
     }
     fun refresh() = repository.refreshAll(force = true)
@@ -605,7 +618,7 @@ class LiveTvViewModel @Inject constructor(
             "recent" -> ChannelGroup.RECENT
             else -> s.homeRowSource
         }
-        buildUi(channels, user, s, groupId, "", true).channels to s
+        buildUi(channels, user, s, groupId, "", true, exactGroup = true).channels to s
     }.flowOn(Dispatchers.Default).distinctUntilChanged()
 
     val homeRow: StateFlow<List<HomeRowEntry>> = combine(
@@ -647,7 +660,7 @@ class LiveTvViewModel @Inject constructor(
                     else -> s.homeRowSource
                 }
                 val limit = if (s.homeRowLimit > 0) s.homeRowLimit * 3 else 200
-                buildUi(channels, user, s, groupId, "", true).channels.take(limit).map { it.key }
+                buildUi(channels, user, s, groupId, "", true, exactGroup = true).channels.take(limit).map { it.key }
             }
         }.flowOn(Dispatchers.Default).distinctUntilChanged()
 

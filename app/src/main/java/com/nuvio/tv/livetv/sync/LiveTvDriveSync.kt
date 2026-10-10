@@ -70,6 +70,9 @@ class LiveTvDriveSync @Inject constructor(
     private val store = context.applicationContext.getSharedPreferences("livetv_drive_sync", Context.MODE_PRIVATE)
     private val mutex = Mutex()
     private val http = OkHttpClient.Builder()
+        // IPv4 first, like Nuvio's own connections: many VPNs (and some routers) leave IPv6
+        // half working, and each Google address then hung until it timed out.
+        .dns(com.nuvio.tv.core.network.IPv4FirstDns())
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
@@ -421,8 +424,16 @@ class LiveTvDriveSync @Inject constructor(
                     "grant_type" to "refresh_token"
                 )
             )
-        }.getOrElse {
-            _state.value = _state.value.copy(message = "Couldn't reach Google Drive.")
+        }.getOrElse { e ->
+            // The reason too (timeout, blocked, no route…), so a VPN or network problem shows.
+            val why = when (e) {
+                is java.net.SocketTimeoutException -> "timed out"
+                is java.net.UnknownHostException -> "couldn't look up Google's address"
+                is javax.net.ssl.SSLException -> "secure connection refused"
+                is java.net.ConnectException -> "connection refused"
+                else -> e.javaClass.simpleName
+            }
+            _state.value = _state.value.copy(message = "Couldn't reach Google Drive ($why).")
             return null
         }
         if (res.optString("error") == "invalid_grant") {
