@@ -76,6 +76,17 @@ fun LiveTvLoadingHost(navController: NavController) {
         vod.loading -> vod.message ?: "Importing movies and series…"
         else -> null
     }
+    // How long it's been working, so a long first load reads as busy rather than stuck.
+    val busy = message != null
+    val startedAt = androidx.compose.runtime.remember(busy) { System.currentTimeMillis() }
+    val elapsedSec by androidx.compose.runtime.produceState(0L, busy) {
+        value = 0L
+        while (busy) {
+            kotlinx.coroutines.delay(1_000)
+            value = (System.currentTimeMillis() - startedAt) / 1000
+        }
+    }
+    val elapsed = if (elapsedSec >= 20) " · " + "%d:%02d".format(elapsedSec / 60, elapsedSec % 60) else ""
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
         AnimatedVisibility(visible = message != null && !playing, enter = fadeIn(), exit = fadeOut()) {
             Row(
@@ -92,7 +103,7 @@ fun LiveTvLoadingHost(navController: NavController) {
                     strokeWidth = 2.dp
                 )
                 Spacer(Modifier.width(10.dp))
-                LiveText(message.orEmpty(), color = Color.White, size = 12.sp)
+                LiveText(message.orEmpty() + elapsed, color = Color.White, size = 12.sp)
             }
         }
     }

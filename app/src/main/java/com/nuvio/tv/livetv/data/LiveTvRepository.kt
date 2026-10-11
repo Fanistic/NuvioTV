@@ -169,9 +169,16 @@ class LiveTvRepository @Inject constructor(
                 xtreamPassword = input.xtreamPassword.trim().ifBlank { fromLink?.second.orEmpty() }
             )
         } else input
+        val wasLive = prefs.currentPlaylists().firstOrNull { it.id == source.id }?.liveEnabled == true
         prefs.updatePlaylists { list -> list.map { if (it.id == source.id) source else it } }
-        // TV channels switched off: take them out of the guide straight away.
-        if (!source.liveEnabled) dropPlaylistNow(source.id)
+        if (!source.liveEnabled) {
+            // TV channels switched off (or never on, for an On Demand-only login): take them out
+            // of the guide straight away and leave Live TV alone. Nothing to download for the
+            // guide, so no "Loading Live TV" bubble; On Demand imports on its own.
+            dropPlaylistNow(source.id)
+            if (wasLive) scope.launch { rebuild() }
+            return
+        }
         scope.launch {
             rebuild()
             refreshInternal(forcePlaylists = false, forceEpg = false, forceIds = setOf(source.id))
@@ -321,9 +328,15 @@ class LiveTvRepository @Inject constructor(
                         if (!unchanged) markChanged(file)
                         LIVE_REPORT.add(if (unchanged) "Playlist \"${pl.name}\": no changes" else "Playlist \"${pl.name}\": new content")
                         !unchanged
-                    } else download(pl.resolvedUrl(), file, pl.userAgent)
+                    } else download(pl.resolvedUrl(), file, pl.userAgent, progressLabel = "Downloading playlist \"${pl.name}\"")
                 }
-                val err = result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName }
+                val err = result.exceptionOrNull()?.let { e ->
+                    when (e) {
+                        is java.net.UnknownHostException -> "Couldn't find the provider's server (${e.message?.substringAfter("\"")?.substringBefore("\"") ?: "address"}). Check the address, your internet, or try again later."
+                        is java.net.SocketTimeoutException -> "The provider took too long to answer (timeout). It may be busy; try again later."
+                        else -> e.message ?: e.javaClass.simpleName
+                    }
+                }
                 prefs.updatePlaylists { list ->
                     list.map {
                         if (it.id == pl.id) it.copy(lastUpdatedMs = if (err == null) now else it.lastUpdatedMs, lastError = err) else it
@@ -353,7 +366,7 @@ class LiveTvRepository @Inject constructor(
                 now - file.lastModified() > settings.epgRefreshHours.coerceAtLeast(1) * HOUR
             if (forceEpg || stale || target.sourceId in forceIds || (target.sourceId == null && changed && !file.exists())) {
                 setStatus(loading = true, message = "Downloading guide \"${target.name}\"…")
-                val result = runCatching { download(target.url, file, target.userAgent) }
+                val result = runCatching { download(target.url, file, target.userAgent, progressLabel = "Downloading guide \"${target.name}\"") }
                 if (result.getOrNull() == true) changed = true
                 val err = result.exceptionOrNull()?.let { it.message ?: it.javaClass.simpleName }
                 if (target.sourceId != null) {
@@ -969,9 +982,10 @@ class LiveTvRepository @Inject constructor(
         val out = ArrayList<LiveChannel>()
         val usedKeys = HashSet<String>()
         var counter = 1
-        for (pl in playlists) {
+        for ((plIndex, pl) in playlists.withIndex()) {
             val file = playlistFile(pl.id)
             if (!file.exists()) continue
+            setStatus(loading = true, message = "Reading channels from \"${pl.name}\"" + (if (playlists.size > 1) " (${plIndex + 1} of ${playlists.size})" else "") + "…")
             val parsed = runCatching { file.bufferedReader().use { M3uParser.parse(it) } }
                 .onFailure { Log.w(TAG, "Parse ${pl.name} failed", it) }
                 .getOrNull() ?: continue
@@ -1058,11 +1072,22 @@ class LiveTvRepository @Inject constructor(
         for ((order, target) in targets.withIndex()) {
             val file = epgFile(target.fileId)
             if (!file.exists()) continue
+            // How far through each guide file it is, so a big guide doesn't look frozen.
+            val fileSize = file.length().coerceAtLeast(1L)
+            val step = if (targets.size > 1) " (${order + 1} of ${targets.size})" else ""
+            var shownAt = 0L
+            val showProgress: (Long) -> Unit = { done ->
+                val now = System.currentTimeMillis()
+                if (now - shownAt > 750) {
+                    shownAt = now
+                    setStatus(loading = true, message = "Reading guide \"${target.name}\"$step… ${(done * 100 / fileSize).coerceIn(0, 99)}%")
+                }
+            }
             val pinnedHere = overrides.filterValues { it.sourceId == target.fileId }
             val idHits = HashMap<String, MutableSet<LiveChannel>>()
             val nameHits = HashMap<String, MutableSet<LiveChannel>>()
             val parsed = runCatching {
-                openMaybeGzip(file).use { input ->
+                openMaybeGzip(file, showProgress).use { input ->
                     XmltvParser.parse(input, windowStart, windowEnd) { xmlChannels ->
                         xmlChannels.values.forEach { xc ->
                             byTvgId[xc.id.lowercase()]?.let { idHits.getOrPut(xc.id) { LinkedHashSet() }.addAll(it) }
@@ -1223,7 +1248,7 @@ class LiveTvRepository @Inject constructor(
      * modified" (we send the ETag / Last-Modified from last time), or the new file is identical.
      * Unchanged files skip the re-reading and re-matching that follows a download.
      */
-    private suspend fun download(url: String, target: File, userAgent: String): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun download(url: String, target: File, userAgent: String, progressLabel: String? = null): Boolean = withContext(Dispatchers.IO) {
         require(url.isNotBlank()) { "No URL set" }
         target.parentFile?.mkdirs()
         val meta = File(target.parentFile, target.name + ".meta")
@@ -1246,7 +1271,28 @@ class LiveTvRepository @Inject constructor(
             if (!response.isSuccessful) error(httpError(response.code))
             val body = response.body ?: error("Empty response")
             val tmp = File(target.parentFile, target.name + ".tmp")
-            body.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it, 64 * 1024) } }
+            // With a label: how much has come in so far, so a big download doesn't look frozen.
+            val total = body.contentLength().takeIf { it > 0 }
+            body.byteStream().use { input ->
+                tmp.outputStream().use { out ->
+                    val buf = ByteArray(64 * 1024)
+                    var read = 0L
+                    var shownAt = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        out.write(buf, 0, n)
+                        read += n
+                        if (progressLabel != null) {
+                            val now = System.currentTimeMillis()
+                            if (now - shownAt > 750) {
+                                shownAt = now
+                                setStatus(loading = true, message = "$progressLabel… " + sizeLabel(read) + (total?.let { " of " + sizeLabel(it) } ?: ""))
+                            }
+                        }
+                    }
+                }
+            }
             if (tmp.length() == 0L) {
                 tmp.delete()
                 error("Empty response")
@@ -1481,18 +1527,36 @@ class LiveTvRepository @Inject constructor(
         401, 403 -> "HTTP $code: the provider refused the request (wrong login, or it blocks this app; try setting a user agent)"
         404 -> "HTTP 404: nothing at that address (check the server, port and link)"
         429 -> "HTTP 429: too many requests, try again in a few minutes"
+        // Not standard codes: Xtream panels use these when an account is over its connection
+        // limit, expired, or blocked for the moment.
+        456, 458, 461 -> "HTTP $code: the provider refused this login for now (too many connections, expired, or blocked). Close other apps using it and try again later."
         502, 503, 504, 520, 521, 522, 523, 524 -> "HTTP $code: the provider's server didn't respond, try again later"
         884 -> "HTTP 884: the provider blocked this app (try setting a user agent)"
         else -> "HTTP $code"
     }
 
-    private fun openMaybeGzip(file: File): InputStream {
-        val input = BufferedInputStream(file.inputStream(), 64 * 1024)
+    private fun openMaybeGzip(file: File, onProgress: ((Long) -> Unit)? = null): InputStream {
+        val raw: InputStream = if (onProgress == null) file.inputStream() else ProgressInputStream(file.inputStream(), onProgress)
+        val input = BufferedInputStream(raw, 64 * 1024)
         input.mark(2)
         val b1 = input.read()
         val b2 = input.read()
         input.reset()
         return if (b1 == 0x1f && b2 == 0x8b) BufferedInputStream(GZIPInputStream(input, 64 * 1024)) else input
+    }
+
+    private fun sizeLabel(bytes: Long): String = when {
+        bytes >= 1024L * 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f GB", bytes / (1024.0 * 1024 * 1024))
+        bytes >= 1024L * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024))
+        else -> "${bytes / 1024} KB"
+    }
+
+    /** Counts what's been read from a file, for "Reading guide… 45%". */
+    private class ProgressInputStream(inner: InputStream, private val onProgress: (Long) -> Unit) : java.io.FilterInputStream(inner) {
+        private var done = 0L
+        override fun read(): Int = super.read().also { if (it >= 0) { done++; onProgress(done) } }
+        override fun read(b: ByteArray, off: Int, len: Int): Int = super.read(b, off, len).also { if (it > 0) { done += it; onProgress(done) } }
+        override fun skip(n: Long): Long = super.skip(n).also { done += it }
     }
 
     private fun sha1(s: String): String =

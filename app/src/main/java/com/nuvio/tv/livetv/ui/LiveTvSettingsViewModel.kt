@@ -22,7 +22,8 @@ class LiveTvSettingsViewModel @Inject constructor(
     private val prefs: LiveTvPreferences,
     val driveSync: com.nuvio.tv.livetv.sync.LiveTvDriveSync,
     val onDemand: com.nuvio.tv.livetv.ondemand.OnDemandRepository,
-    private val posterResolver: com.nuvio.tv.livetv.data.LiveTvPosterResolver
+    private val posterResolver: com.nuvio.tv.livetv.data.LiveTvPosterResolver,
+    private val matcher247: com.nuvio.tv.livetv.data.LiveTv247Matcher
 ) : ViewModel() {
 
     val playlists: StateFlow<List<PlaylistSource>> =
@@ -65,6 +66,15 @@ class LiveTvSettingsViewModel @Inject constructor(
         repository.updatePlaylist(source)
         onDemand.refreshSoon()
     }
+    /**
+     * "Update now" on a playlist. A login with TV channels off only has On Demand to update, so
+     * its movies and series are re-imported straight away (and Live TV isn't touched).
+     */
+    fun updatePlaylistNow(source: PlaylistSource) = viewModelScope.launch {
+        repository.updatePlaylist(source)
+        if (source.isXtream && source.importVod && !source.liveEnabled) onDemand.refreshNow(source.id)
+        else onDemand.refreshSoon()
+    }
     fun removePlaylist(id: String) = viewModelScope.launch { repository.removePlaylist(id) }
     fun setPlaylistLogoSource(id: String, logoSource: String) =
         viewModelScope.launch { repository.setPlaylistLogoSource(id, logoSource) }
@@ -94,7 +104,10 @@ class LiveTvSettingsViewModel @Inject constructor(
 
     /** Settings → "Test poster lookup". */
     /** Forgets every Live TV poster and show info, so they're fetched again from your addons. */
-    fun clearPosterData() = posterResolver.clearAll()
+    fun clearPosterData() {
+        posterResolver.clearAll() // also empties the saved posters, 24/7 matches included
+        matcher247.clear()
+    }
 
     fun testPoster(title: String) = viewModelScope.launch {
         posterTest.value = "Searching…"

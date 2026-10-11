@@ -4,6 +4,7 @@ import com.nuvio.tv.livetv.model.LiveChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -22,7 +23,8 @@ import javax.inject.Singleton
 @Singleton
 class LiveTvChannelStore @Inject constructor(
     private val repository: LiveTvRepository,
-    private val prefs: LiveTvPreferences
+    private val prefs: LiveTvPreferences,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -95,14 +97,71 @@ class LiveTvChannelStore @Inject constructor(
         if (terms.isEmpty()) return emptyMap()
         val key = cleanedFor
         if (key != null && key.first === channels && key.second == raw) return cleanedCache
+        // Each name is only worked out once: the results are kept by name (in memory and on
+        // disk), so starting the app or a playlist update only cleans names it hasn't seen.
+        val memo = nameMemo(raw)
+        var added = false
         val out = HashMap<String, String>(channels.size)
         channels.forEach { c ->
-            val n = com.nuvio.tv.livetv.model.ChannelNameEditor.clean(c.name, terms)
+            val n = memo[c.name] ?: com.nuvio.tv.livetv.model.ChannelNameEditor.clean(c.name, terms).also {
+                memo[c.name] = it
+                added = true
+            }
             if (n != c.name) out[c.key] = n
         }
         cleanedCache = out
         cleanedFor = channels to raw
+        if (added) saveMemo(raw, channels)
         return out
+    }
+
+    // Channel name editor results by original name, for the current list of terms.
+    private val memoLock = Any()
+    @Volatile private var memoFor: String? = null
+    private var memo: MutableMap<String, String> = java.util.concurrent.ConcurrentHashMap()
+    private val memoFile by lazy { java.io.File(java.io.File(context.filesDir, "livetv"), "name_editor_cache.txt") }
+    private var saveJob: kotlinx.coroutines.Job? = null
+
+    private fun nameMemo(raw: String): MutableMap<String, String> = synchronized(memoLock) {
+        if (memoFor == raw) return memo
+        val fresh = java.util.concurrent.ConcurrentHashMap<String, String>()
+        // Saved results only count when they were made with exactly these terms.
+        runCatching {
+            if (memoFile.exists()) memoFile.bufferedReader().use { r ->
+                if (r.readLine() == raw.replace('\n', ' ')) {
+                    while (true) {
+                        val line = r.readLine() ?: break
+                        val tab = line.indexOf('\t')
+                        if (tab > 0) fresh[line.substring(0, tab)] = line.substring(tab + 1)
+                    }
+                }
+            }
+        }
+        memo = fresh
+        memoFor = raw
+        fresh
+    }
+
+    /** Saves the results a few seconds later, keeping only names still in the channel list. */
+    private fun saveMemo(raw: String, channels: List<LiveChannel>) {
+        saveJob?.cancel()
+        saveJob = scope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(3_000)
+            val current = synchronized(memoLock) { if (memoFor == raw) memo else return@launch }
+            val names = channels.mapTo(HashSet()) { it.name }
+            runCatching {
+                memoFile.parentFile?.mkdirs()
+                val tmp = java.io.File(memoFile.parentFile, memoFile.name + ".tmp")
+                tmp.bufferedWriter().use { w ->
+                    w.write(raw.replace('\n', ' ')); w.newLine()
+                    for ((name, cleaned) in current) {
+                        if (name !in names || '\n' in name || '\t' in name || '\n' in cleaned) continue
+                        w.write(name); w.write("\t"); w.write(cleaned); w.newLine()
+                    }
+                }
+                if (!tmp.renameTo(memoFile)) { memoFile.delete(); tmp.renameTo(memoFile) }
+            }
+        }
     }
 
     /** "playlist|tvg-id" from a channel key, or null when the channel has no tvg-id. */

@@ -173,14 +173,23 @@ class OnDemandRepository @Inject constructor(
         scope.launch { refresh(force = true) }
     }
 
-    /** Imports providers that are due (or all, when [force]); drops ones that were turned off. */
-    suspend fun refresh(force: Boolean) = mutex.withLock {
+    /** "Update now" on one login: re-imports just that provider's movies and series. */
+    fun refreshNow(playlistId: String) {
+        scope.launch { kotlinx.coroutines.delay(500); refresh(force = true, onlyId = playlistId) }
+    }
+
+    /**
+     * Imports providers that are due (or all, when [force]); drops ones that were turned off.
+     * With [onlyId], only that provider is imported (the others are kept as they are).
+     */
+    suspend fun refresh(force: Boolean, onlyId: String? = null) = mutex.withLock {
         val playlists = prefs.playlists.first().filter { it.enabled && it.isXtream && it.importVod }
         val keep = playlists.map { it.id }.toSet()
         runCatching { db.removeExcept(keep) }
         val stamps = prefs.onDemandImportTimes()
         val now = System.currentTimeMillis()
         for (pl in playlists) {
+            if (onlyId != null && pl.id != onlyId) continue
             val last = stamps[pl.id] ?: 0L
             if (!force && now - last < REFRESH_MS) continue
             // Automatic imports wait while a movie or episode is playing in Nuvio's player.

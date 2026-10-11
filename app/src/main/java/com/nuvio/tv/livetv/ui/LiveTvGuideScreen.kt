@@ -1117,7 +1117,9 @@ fun LiveTvGuideScreen(
                                 action = "Press OK to open Live TV settings"
                             )
                             channels.isEmpty() && status.loading -> EmptyGuideMessage(
-                                title = status.message ?: "Loading…", body = null, action = null
+                                title = status.message ?: "Loading…",
+                                body = "Large playlists and guides can take several minutes the first time. It keeps going if you leave this screen, and next time it opens straight away.",
+                                action = null
                             )
                             channels.isEmpty() && ui.selectedGroupId == ChannelGroup.SEARCH -> EmptyGuideMessage(
                                 title = if (ui.searchQuery.isBlank()) "Search channels" else "No channels match \"${ui.searchQuery}\"",
@@ -2219,7 +2221,9 @@ private fun ProgramBlock(
                 LiveText(
                     it,
                     modifier = Modifier.fillMaxWidth(),
-                    color = colors.text.copy(alpha = 0.7f),
+                    // Dimmer than the title, so the times sit back; a little brighter on the
+                    // highlighted show so they stay readable on a solid highlight.
+                    color = colors.text.copy(alpha = if (focused) 0.6f else 0.42f),
                     size = 12.sp,
                     marquee = focused
                 )

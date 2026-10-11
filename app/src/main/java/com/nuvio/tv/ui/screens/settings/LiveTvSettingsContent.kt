@@ -1020,7 +1020,7 @@ fun LiveTvSettingsContent(
             title = d.source.name,
             actions = listOf(
                 "Edit" to { dialog = LiveDialog.EditPlaylist(d.source) },
-                "Update now" to { viewModel.savePlaylist(d.source); close() },
+                "Update now" to { viewModel.updatePlaylistNow(d.source); close() },
                 (if (d.source.enabled) "Disable" else "Enable") to { viewModel.setPlaylistEnabled(d.source.id, !d.source.enabled); close() },
                 "Delete playlist" to { dialog = LiveDialog.ConfirmDeletePlaylist(d.source) },
                 // Whose channel logos to show: the playlist's own or the guide's (each falls back

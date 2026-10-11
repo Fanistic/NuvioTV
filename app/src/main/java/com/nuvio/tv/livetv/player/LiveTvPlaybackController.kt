@@ -245,9 +245,13 @@ class LiveTvPlaybackController @Inject constructor(
         overrideUrl: String? = null,
         catchupTitle: String? = null,
         fallback: String? = null,
-        fallbacks: List<String> = emptyList()
+        fallbacks: List<String> = emptyList(),
+        /** Catch-up: the real time the replay should start at (the show's start). */
+        catchupStartMs: Long? = null
     ) {
         if (_shiftStartedAt.value != null) stopShift()
+        archiveStartWallMs = if (catchupTitle != null) catchupStartMs else null
+        archiveWallMapped = false
         if (currentChannel?.key != channel.key) captionsHandled = false
         val url = overrideUrl ?: channel.url
         if (currentChannel?.key != channel.key || currentUrl != url) {
@@ -282,6 +286,46 @@ class LiveTvPlaybackController @Inject constructor(
      * live edge (so "Watch from start" landed near now, and you had to rewind by hand).
      */
     @Volatile private var archiveStartPending = false
+
+    /** The real time the replay should start at, when known. */
+    @Volatile private var archiveStartWallMs: Long? = null
+
+    /**
+     * The provider sent its live stream with a long rewind window instead of the show itself:
+     * positions are then worked out from the stream's own clock (see [archiveOffsetMs]).
+     */
+    @Volatile var archiveWallMapped = false
+        private set
+
+    /** The stream's clock time at the current position, when the stream carries one. */
+    private fun streamWallMs(p: ExoPlayer): Long? {
+        val tl = p.currentTimeline
+        if (tl.isEmpty) return null
+        val w = tl.getWindow(p.currentMediaItemIndex.coerceIn(0, tl.windowCount - 1), androidx.media3.common.Timeline.Window())
+        if (w.isPlaceholder || w.windowStartTimeMs == C.TIME_UNSET) return null
+        return w.windowStartTimeMs + p.currentPosition
+    }
+
+    /**
+     * Time into the show that started at [programStartMs], for a replay that came as the live
+     * stream's rewind window. Null for ordinary replays (there the position is the time).
+     */
+    fun archiveOffsetMs(programStartMs: Long): Long? {
+        if (!archiveWallMapped) return null
+        val p = _player ?: return null
+        return streamWallMs(p)?.let { it - programStartMs }
+    }
+
+    /** Seeks such a replay to [offsetMs] into the show; false if it can't be done in the stream. */
+    fun seekArchiveTo(programStartMs: Long, offsetMs: Long): Boolean {
+        if (!archiveWallMapped) return false
+        val p = _player ?: return false
+        val wall = streamWallMs(p) ?: return false
+        val target = p.currentPosition + (programStartMs + offsetMs - wall)
+        if (target < 0) return false
+        p.seekTo(target)
+        return true
+    }
 
     /** Plain words for playback errors, with the provider's HTTP status when there is one. */
     private fun describe(error: PlaybackException): String {
@@ -639,12 +683,28 @@ class LiveTvPlaybackController @Inject constructor(
         override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
             if (!archiveStartPending || timeline.isEmpty) return
             val p = _player ?: return
+            val window = timeline.getWindow(p.currentMediaItemIndex.coerceIn(0, timeline.windowCount - 1), androidx.media3.common.Timeline.Window())
+            // The first timeline is only a stand-in until the stream answers. A seek to 0 made
+            // then is ignored by the player (it reads 0 as "no seek" and starts live streams at
+            // the live edge), which is why "Watch from start" still began at now on some
+            // providers. Wait for the real one.
+            if (window.isPlaceholder) return
             archiveStartPending = false
             if (_state.value.catchupTitle == null) return
+            if (!(window.isDynamic || window.isLive())) return
             // A replay sent as a growing live stream: the player would start it at the live
-            // edge. Go to the start of the window (the start of the show we asked for).
-            val window = timeline.getWindow(p.currentMediaItemIndex.coerceIn(0, timeline.windowCount - 1), androidx.media3.common.Timeline.Window())
-            if (window.isDynamic || window.isLive()) {
+            // edge. When the stream carries its own clock and reaches back before the show
+            // (the provider sent its live stream with a long rewind window instead of just the
+            // show), go to the show's start by the clock; otherwise to the start of the window.
+            val startWall = archiveStartWallMs
+            val windowStart = window.windowStartTimeMs
+            if (startWall != null && windowStart != C.TIME_UNSET && startWall - windowStart > 120_000) {
+                val length = window.durationMs.takeIf { it != C.TIME_UNSET && it > 0 } ?: Long.MAX_VALUE
+                val target = (startWall - windowStart).coerceAtMost(length)
+                archiveWallMapped = true
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up came as the live stream with rewind; jumping back ${target / 60_000} min into it to the show's start")
+                p.seekTo(target)
+            } else {
                 com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up came as a live stream; starting from the beginning")
                 p.seekTo(0L)
             }

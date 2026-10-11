@@ -76,6 +76,7 @@ class LiveTvViewModel @Inject constructor(
     private val session: LiveTvSession,
     private val channelStore: com.nuvio.tv.livetv.data.LiveTvChannelStore,
     private val posterResolver: com.nuvio.tv.livetv.data.LiveTvPosterResolver,
+    private val matcher247: com.nuvio.tv.livetv.data.LiveTv247Matcher,
     layoutPrefs: com.nuvio.tv.data.local.LayoutPreferenceDataStore,
     driveSync: com.nuvio.tv.livetv.sync.LiveTvDriveSync
 ) : ViewModel() {
@@ -500,7 +501,8 @@ class LiveTvViewModel @Inject constructor(
         ) ?: return false
         playback.play(
             channel, overrideUrl = url, catchupTitle = program.title,
-            fallbacks = CatchupUrlBuilder.alternatives(url, zone)
+            fallbacks = CatchupUrlBuilder.alternatives(url, zone),
+            catchupStartMs = start
         )
         _catchup.value = CatchupSession(channel, program, offsetMs.coerceAtLeast(0))
         // Load this channel's full schedule, so catch-up can follow on into later shows.
@@ -552,6 +554,8 @@ class LiveTvViewModel @Inject constructor(
     /** Where playback is, as time into the catch-up program. */
     fun catchupPositionMs(): Long? {
         val s = _catchup.value ?: return null
+        // A replay that came as the live stream's rewind window: go by the stream's clock.
+        playback.archiveOffsetMs(s.program.startMs)?.let { return it.coerceAtLeast(0) }
         val pos = playback.player?.currentPosition ?: 0L
         return s.baseOffsetMs + pos.coerceAtLeast(0)
     }
@@ -565,6 +569,7 @@ class LiveTvViewModel @Inject constructor(
         val now = System.currentTimeMillis()
         val latest = (minOf(s.program.stopMs, now - 15_000) - s.program.startMs).coerceAtLeast(0)
         val target = offsetMs.coerceIn(0, latest)
+        if (playback.seekArchiveTo(s.program.startMs, target)) return
         val p = playback.player
         val inStream = target - s.baseOffsetMs
         if (p != null && p.isCurrentMediaItemSeekable && p.duration != androidx.media3.common.C.TIME_UNSET &&
@@ -863,7 +868,10 @@ class LiveTvViewModel @Inject constructor(
      */
     suspend fun channelAbout(channel: LiveChannel, programTitle: String? = null, urgent: Boolean = true): com.nuvio.tv.domain.model.MetaPreview? {
         if (!com.nuvio.tv.livetv.data.LiveTvPosterResolver.is247(channel)) return null
-        for (name in showNames247(channel, programTitle)) posterResolver.aboutTitle(name, urgent)?.let { return it }
+        val names = showNames247(channel, programTitle)
+        // TMDB first: it knows shows, film series, actors and films by name.
+        matcher247.match(channel, names)?.let { return it.toMeta() }
+        for (name in names) posterResolver.aboutTitle(name, urgent)?.let { return it }
         return null
     }
 
@@ -883,6 +891,9 @@ class LiveTvViewModel @Inject constructor(
     suspend fun channelPoster(channel: LiveChannel, program: EpgProgram? = null, urgent: Boolean = true): String? {
         if (!settings.value.showPosters) return null
         if (!com.nuvio.tv.livetv.data.LiveTvPosterResolver.is247(channel)) return null
+        // TMDB first (a show, a film series' collection cover, an actor's photo or a film);
+        // your addons' catalogs if TMDB has nothing by that name.
+        matcher247.match(channel, showNames247(channel, program?.title))?.let { return it.poster }
         val hint = com.nuvio.tv.livetv.data.LiveTvPosterResolver.TypeHint(
             com.nuvio.tv.livetv.data.LiveTvPosterResolver.Kind.SERIES,
             strong = false,
@@ -1045,3 +1056,22 @@ class LiveTvViewModel @Inject constructor(
 
 /** How far past the end of a show a catch-up replay keeps going (into the next shows). */
 private const val CONTINUE_MS = 3L * 60 * 60 * 1000
+
+/** A TMDB 24/7 match as the show info the guide's panels already know how to show. */
+private fun com.nuvio.tv.livetv.data.LiveTv247Matcher.Match.toMeta() = com.nuvio.tv.domain.model.MetaPreview(
+    id = "tmdb247:" + kind + ":" + title,
+    type = when (kind) {
+        "series" -> com.nuvio.tv.domain.model.ContentType.SERIES
+        "movie", "collection" -> com.nuvio.tv.domain.model.ContentType.MOVIE
+        else -> com.nuvio.tv.domain.model.ContentType.UNKNOWN
+    },
+    name = title,
+    poster = poster,
+    posterShape = com.nuvio.tv.domain.model.PosterShape.POSTER,
+    background = backdrop,
+    logo = null,
+    description = overview,
+    releaseInfo = year,
+    imdbRating = rating,
+    genres = emptyList()
+)
