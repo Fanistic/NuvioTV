@@ -104,17 +104,7 @@ class LiveTvTimeshift(private val context: Context) {
         }
     }
 
-    private fun open(url: String, headers: Map<String, String>): HttpURLConnection {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 15_000
-        c.readTimeout = 20_000
-        c.instanceFollowRedirects = true
-        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-        if (headers.keys.none { it.equals("User-Agent", true) }) {
-            c.setRequestProperty("User-Agent", com.nuvio.tv.livetv.data.LiveTvRepository.DEFAULT_UA)
-        }
-        return c
-    }
+    private fun open(url: String, headers: Map<String, String>): HttpURLConnection = LiveHttp.open(url, headers, 20_000)
 
     // ------------------------------------------------------------------ TS
 
@@ -181,7 +171,7 @@ class LiveTvTimeshift(private val context: Context) {
     private suspend fun recordHls(url: String, headers: Map<String, String>, dir: File, local: File, keepMinutes: Int) {
         try {
             var mediaUrl = url
-            var text = fetchText(mediaUrl, headers)
+            var text = LiveHttp.fetch(mediaUrl, headers).let { (t, u) -> mediaUrl = u; t }
             // A master playlist: take the best-quality variant.
             if (text.contains("#EXT-X-STREAM-INF")) {
                 val lines = text.lines()
@@ -195,7 +185,7 @@ class LiveTvTimeshift(private val context: Context) {
                     }
                 }
                 mediaUrl = resolve(mediaUrl, bestUri ?: return)
-                text = fetchText(mediaUrl, headers)
+                text = LiveHttp.fetch(mediaUrl, headers).let { (t, u) -> mediaUrl = u; t }
             }
             // Encrypted streams aren't recorded (the keys would have to be saved too).
             if (text.contains("#EXT-X-KEY") && !text.contains("METHOD=NONE")) {
@@ -244,7 +234,7 @@ class LiveTvTimeshift(private val context: Context) {
                 }
                 writeLocalPlaylist(local, saved, target, mapLine)
                 delay((target * 1000L / 2).coerceIn(1_000L, 6_000L))
-                text = runCatching { fetchText(mediaUrl, headers) }.getOrElse { delay(2_000); continue }
+                text = runCatching { LiveHttp.fetch(mediaUrl, headers).let { (t, u) -> mediaUrl = u; t } }.getOrElse { delay(2_000); continue }
             }
         } catch (e: Exception) {
             Log.w(TAG, "HLS recording stopped: ${e.message}")

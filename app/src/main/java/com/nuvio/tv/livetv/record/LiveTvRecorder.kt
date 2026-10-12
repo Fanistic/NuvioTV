@@ -309,7 +309,7 @@ class LiveTvRecorder @Inject constructor(
         onProgress: (Double, Long) -> Unit
     ): String? {
         var mediaUrl = url
-        var text = fetchText(mediaUrl, headers)
+        var text = com.nuvio.tv.livetv.player.LiveHttp.fetch(mediaUrl, headers).let { (t, u) -> mediaUrl = u; t }
         if (text.contains("#EXT-X-STREAM-INF")) {
             val lines = text.lines()
             var best = -1L
@@ -322,7 +322,7 @@ class LiveTvRecorder @Inject constructor(
                 }
             }
             mediaUrl = resolve(mediaUrl, bestUri ?: return "This channel's stream couldn't be read")
-            text = fetchText(mediaUrl, headers)
+            text = com.nuvio.tv.livetv.player.LiveHttp.fetch(mediaUrl, headers).let { (t, u) -> mediaUrl = u; t }
         }
         if (text.contains("#EXT-X-KEY") && !text.contains("METHOD=NONE")) return "This channel is encrypted and can't be recorded"
         data class Seg(val seq: Long, val dur: Double, val name: String, val disc: Boolean)
@@ -385,7 +385,7 @@ class LiveTvRecorder @Inject constructor(
             if (finite && text.contains("#EXT-X-ENDLIST")) break
             delay((target * 1000L / 2).coerceIn(1_000L, 6_000L))
             text = try {
-                fetchText(mediaUrl, headers)
+                com.nuvio.tv.livetv.player.LiveHttp.fetch(mediaUrl, headers).let { (t, u) -> mediaUrl = u; t }
             } catch (e: Exception) {
                 problem = "The connection dropped; it reconnected where it could"
                 gap = saved.isNotEmpty()
@@ -475,15 +475,8 @@ class LiveTvRecorder @Inject constructor(
         if (jobs.isEmpty() || _recordings.value.none { it.isRecording }) LiveTvRecordingService.stop(context)
     }
 
-    private fun open(url: String, headers: Map<String, String>): HttpURLConnection {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.connectTimeout = 15_000
-        c.readTimeout = 30_000
-        c.instanceFollowRedirects = true
-        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-        if (headers.keys.none { it.equals("User-Agent", true) }) c.setRequestProperty("User-Agent", LiveTvRepository.DEFAULT_UA)
-        return c
-    }
+    private fun open(url: String, headers: Map<String, String>): HttpURLConnection =
+        com.nuvio.tv.livetv.player.LiveHttp.open(url, headers, 30_000)
 
     private fun fetchText(url: String, headers: Map<String, String>): String =
         open(url, headers).inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
