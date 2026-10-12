@@ -1059,8 +1059,8 @@ class LiveTvViewModel @Inject constructor(
         )
         if (watching) playback.playFromRecording(recorder.playlistFile(rec))
         val until = formatClock(stopAt, settings.value.use24HourClock)
-        return if (recorder.freeBytes() < needed) "Recording "$title" until $until. Storage is low, so it may stop early."
-        else "Recording "$title" until $until"
+        return if (recorder.freeBytes() < needed) "Recording \"$title\" until $until. Storage is low, so it may stop early."
+        else "Recording \"$title\" until $until"
     }
 
     fun currentProgram(channelKey: String, at: Long = _now.value): EpgProgram? =

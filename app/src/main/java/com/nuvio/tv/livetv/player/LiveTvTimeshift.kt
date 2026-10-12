@@ -97,7 +97,7 @@ class LiveTvTimeshift(private val context: Context) {
         // Leftovers from earlier (a crash, the app being closed while paused).
         scope.launch {
             runCatching {
-                (File(context.cacheDir, "timeshift").listFiles().orEmpty() + baseDir.listFiles().orEmpty()).forEach { f ->
+                (File(context.cacheDir, "timeshift").listFiles()?.toList().orEmpty() + baseDir.listFiles()?.toList().orEmpty()).forEach { f: File ->
                     if (f.lastModified() < System.currentTimeMillis() - 6 * 60 * 60 * 1000L) f.deleteRecursively()
                 }
             }

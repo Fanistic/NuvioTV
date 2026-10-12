@@ -440,7 +440,7 @@ class LiveTvRecorder @Inject constructor(
         folders.distinctBy { it.absolutePath }.flatMap { root -> root.listFiles()?.filter { it.isDirectory }.orEmpty() }.forEach { d ->
             val info = File(d, "info.json")
             val rec = runCatching { LiveTvRecording.fromJson(JSONObject(info.readText()), d.absolutePath) }.getOrNull() ?: return@forEach
-            if (rec.isRecording && rec.id !in jobs) {
+            if (rec.isRecording && !jobs.containsKey(rec.id)) {
                 val playlist = playlistFileOf(d)
                 val fixed = if (playlist.exists()) {
                     ensureEnded(playlist)
