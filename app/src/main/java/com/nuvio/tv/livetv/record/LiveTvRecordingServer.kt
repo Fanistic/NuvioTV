@@ -66,6 +66,12 @@ object LiveTvRecordingServer {
         val base = dirs[path.substringBefore('/')] ?: return@use
         val file = File(base, path.substringAfter('/', ""))
         val out = sock.getOutputStream()
+        // A recording that has only just started: its playlist appears with the first piece, a
+        // few seconds in. Wait for it rather than answering "not found" straight away.
+        if (file.extension.equals("m3u8", true) && !file.isFile) {
+            var waited = 0
+            while (!file.isFile && waited < 15_000) { Thread.sleep(250); waited += 250 }
+        }
         // Only files inside the recordings folder.
         if (path.contains("..") || !file.canonicalPath.startsWith(base.canonicalPath) || !file.isFile) {
             out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())

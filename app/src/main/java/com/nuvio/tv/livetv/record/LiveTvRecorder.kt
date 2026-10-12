@@ -109,7 +109,9 @@ class LiveTvRecorder @Inject constructor(
         fallbacks: List<String> = emptyList(),
         /** Called once it's finished (done or failed). */
         onFinished: (LiveTvRecording) -> Unit = {},
-        seriesId: String? = null
+        seriesId: String? = null,
+        /** The player has just let go of this channel's connection: wait this long before connecting. */
+        startDelayMs: Long = 0L
     ): LiveTvRecording {
         if (!finite) activeFor(channel.key)?.let { return it }
         val now = System.currentTimeMillis()
@@ -145,7 +147,11 @@ class LiveTvRecorder @Inject constructor(
         save(rec)
         update(rec)
         LiveTvRecordingService.start(context)
-        jobs[id] = scope.launch { record(rec, url, channel.headers, finite, fallbacks, onFinished) }
+        jobs[id] = scope.launch {
+            // Accounts with one connection can refuse a new one while the old is still closing.
+            if (startDelayMs > 0) delay(startDelayMs)
+            record(rec, url, channel.headers, finite, fallbacks, onFinished)
+        }
         com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Recording \"$title\" on ${channel.name} until ${java.util.Date(stopAtMs)}")
         return rec
     }
@@ -208,6 +214,7 @@ class LiveTvRecorder @Inject constructor(
                         val c = open(url, headers)
                         if (c.responseCode !in 200..299) {
                             problem = "The provider answered HTTP ${c.responseCode}"
+                            rec = noteProblem(rec, problem)
                             c.disconnect()
                             // Catch-up: try the other link forms.
                             if (finite && links.isNotEmpty()) url = links.removeFirst()
@@ -242,6 +249,7 @@ class LiveTvRecorder @Inject constructor(
                             break
                         }
                         problem = "The connection dropped (${e.message ?: e.javaClass.simpleName}); it reconnected where it could"
+                        rec = noteProblem(rec, problem)
                         Log.w(TAG, "Recording ${rec.id}: ${e.message}")
                     }
                 }
@@ -276,9 +284,17 @@ class LiveTvRecorder @Inject constructor(
 
     private fun currentStop(id: String): Long = _recordings.value.firstOrNull { it.id == id }?.stopAtMs ?: 0L
 
+    /** Shows what's going wrong while it's still recording (Recordings shows it under the title). */
+    private fun noteProblem(rec: LiveTvRecording, problem: String?): LiveTvRecording {
+        val latest = _recordings.value.firstOrNull { it.id == rec.id } ?: rec
+        val r = latest.copy(problem = problem)
+        update(r)
+        return r
+    }
+
     private fun progress(rec: LiveTvRecording, durationSec: Double, size: Long): LiveTvRecording {
         val latest = _recordings.value.firstOrNull { it.id == rec.id } ?: rec
-        val r = latest.copy(durationSec = durationSec, sizeBytes = size)
+        val r = latest.copy(durationSec = durationSec, sizeBytes = size, problem = if (durationSec > latest.durationSec) null else latest.problem)
         save(r); update(r)
         return r
     }

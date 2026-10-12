@@ -167,7 +167,13 @@ fun RecordingsScreen(
                     RecordingRow(
                         rec, posters[rec.id],
                         modifier = if (rec == recordings.firstOrNull()) Modifier.focusRequester(first) else Modifier,
-                        onClick = { onPlay(viewModel.playUrl(rec), rec.title, posters[rec.id], rec.id, false) },
+                        onClick = {
+                            // Nothing saved yet (it's still connecting): say so instead of an error.
+                            if (rec.durationSec <= 0) LiveTvNotice.show(
+                                "\"${rec.title}\" hasn't recorded anything yet" + (rec.problem?.let { ": $it" } ?: ". Give it a few seconds.")
+                            )
+                            else onPlay(viewModel.playUrl(rec), rec.title, posters[rec.id], rec.id, false)
+                        },
                         onMenu = { menuFor = rec }
                     )
                 }
@@ -356,7 +362,9 @@ private fun RecordingRow(
                 color = colors.TextSecondary
             )
             val status = when {
-                rec.isRecording -> "Recording until " + SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(rec.stopAtMs))
+                rec.isRecording && rec.durationSec <= 0 -> "Starting…" + (rec.problem?.let { " ($it)" } ?: "")
+                rec.isRecording -> "Recording until " + SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(rec.stopAtMs)) +
+                    (rec.problem?.let { " · $it" } ?: "")
                 rec.status == RecordingStatus.FAILED -> rec.problem ?: "Couldn't be recorded"
                 else -> rec.problem
             }

@@ -1055,7 +1055,8 @@ class LiveTvViewModel @Inject constructor(
             description = show?.description,
             programStartMs = show?.startMs ?: 0L,
             programStopMs = show?.stopMs ?: 0L,
-            stopAtMs = stopAt
+            stopAtMs = stopAt,
+            startDelayMs = if (watching) 1_500L else 0L
         )
         if (watching) playback.playFromRecording(recorder.playlistFile(rec))
         val until = formatClock(stopAt, settings.value.use24HourClock)

@@ -121,20 +121,54 @@ class LiveTvTimeshift(private val context: Context) {
     private suspend fun recordTs(url: String, headers: Map<String, String>, dir: File, keepMinutes: Int) {
         // Pieces past the time limit are dropped as new ones come in (it records on, behind you).
         val segmenter = TsSegmenter(dir, keepSec = keepMinutes * 60.0) { _ -> }
+        val report = com.nuvio.tv.livetv.model.LiveTvLoadReport
+        val began = System.currentTimeMillis()
+        // The player has only just let go of its connection: give the provider a moment, or
+        // accounts with one connection can refuse (or later cut) this one.
+        delay(1_500)
+        var attempt = 0
         try {
-            val c = open(url, headers)
-            c.inputStream.use { input ->
-                val buf = ByteArray(64 * 1024)
-                while (scope.isActive && recording) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    segmenter.write(buf, 0, n)
-                    trimmedMs = (segmenter.trimmedSec * 1000).toLong()
+            // Keeps going until you go live or change channel: a dropped connection is opened
+            // again, with the gap marked, instead of ending the buffer (which sent you back to
+            // live after half a minute or so).
+            while (scope.isActive && recording) {
+                if (attempt > 0) {
+                    segmenter.reconnected()
+                    delay((attempt * 2_000L).coerceAtMost(8_000L))
                 }
+                attempt++
+                val t0 = System.currentTimeMillis()
+                var bytes = 0L
+                val why = try {
+                    val c = open(url, headers)
+                    val code = c.responseCode
+                    if (code !in 200..299) { c.disconnect(); "HTTP $code" }
+                    else c.inputStream.use { input ->
+                        val buf = ByteArray(64 * 1024)
+                        var end = "the provider ended the stream"
+                        while (scope.isActive && recording) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            bytes += n
+                            segmenter.write(buf, 0, n)
+                            trimmedMs = (segmenter.trimmedSec * 1000).toLong()
+                        }
+                        if (!recording) end = "stopped"
+                        end
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    e.message ?: e.javaClass.simpleName
+                }
+                if (!recording) break
+                report.add("Pause buffer: connection ended after ${(System.currentTimeMillis() - t0) / 1000}s, ${bytes / 1024} KB ($why); reconnecting")
+                // Got nothing at all several times running: give up (the provider won't serve it).
+                if (bytes == 0L && attempt >= 4) { report.add("Pause buffer: gave up (no data)"); break }
+                if (bytes > 0) attempt = 1
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Recording stopped: ${e.message}")
         } finally {
+            report.add("Pause buffer finished after ${(System.currentTimeMillis() - began) / 1000}s (${segmenter.totalSec.toInt()}s recorded)")
             runCatching { segmenter.finish(ended = true) }
             recording = false
         }

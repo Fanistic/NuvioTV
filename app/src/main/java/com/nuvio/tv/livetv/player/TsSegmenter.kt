@@ -192,11 +192,15 @@ class TsSegmenter(
 
     private fun writePlaylist(ended: Boolean) {
         if (pieces.isEmpty()) return
-        val target = kotlin.math.ceil(pieces.maxOf { it.durationSec }).toInt().coerceAtLeast(1)
+        // A steady target length from the start (pieces can run longer than planned when the
+        // stream rarely marks a clean cut): a target that grows mid-way, or pieces longer than
+        // it, made the player think the playlist had stalled and give up.
+        val target = maxOf(20, kotlin.math.ceil(pieces.maxOf { it.durationSec }).toInt())
         val sb = StringBuilder()
         sb.append("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:").append(target).append('\n')
         sb.append("#EXT-X-MEDIA-SEQUENCE:").append(pieces.first().seq).append('\n')
-        sb.append("#EXT-X-PLAYLIST-TYPE:EVENT\n")
+        // A rewind buffer drops its oldest pieces, which an "EVENT" playlist isn't allowed to do.
+        if (keepSec == null) sb.append("#EXT-X-PLAYLIST-TYPE:EVENT\n")
         pieces.forEach { pc ->
             if (pc.discontinuity) sb.append("#EXT-X-DISCONTINUITY\n")
             sb.append("#EXTINF:").append(String.format(java.util.Locale.US, "%.3f", pc.durationSec)).append(",\n")

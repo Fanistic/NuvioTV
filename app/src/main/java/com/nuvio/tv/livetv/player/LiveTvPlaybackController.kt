@@ -172,6 +172,25 @@ class LiveTvPlaybackController @Inject constructor(
         return System.currentTimeMillis() - pos > 20_000
     }
 
+    @Volatile private var shiftReloads = 0
+
+    /** Plays the buffer again from [positionMs] (after it ran dry or a read error). */
+    private fun reloadShiftAt(positionMs: Long, why: String) {
+        val p = _player ?: return
+        val session = timeshift.session ?: return
+        shiftReloads++
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: $why; picking up again")
+        shiftJob?.cancel()
+        shiftJob = scope.launch {
+            delay(1_500)
+            if (timeshift.session != session) return@launch
+            p.setMediaSource(localRecordingSource(session.playUri), positionMs.coerceAtLeast(0L))
+            p.prepare()
+            p.playWhenReady = true
+            shiftPrepared = true
+        }
+    }
+
     /** The earliest point the buffer still has (wall clock), while playing from it. */
     fun shiftEarliestWallMs(): Long? = _shiftStartedAt.value?.let { it + timeshift.trimmedMs }
 
@@ -276,12 +295,22 @@ class LiveTvPlaybackController @Inject constructor(
         if (shiftPrepared) { p.play(); return }
         shiftJob?.cancel()
         shiftJob = scope.launch {
-            // Wait until the first part is saved (a second or two for HLS).
+            // Wait until the first part is saved (a few seconds). Never left stuck: if the
+            // channel couldn't be recorded (the provider refused, the recording stopped), it goes
+            // back to live and says so, instead of staying paused.
+            _state.value = _state.value.copy(isBuffering = true)
             var waited = 0
-            while (waited < 15_000) {
-                val f = java.io.File(session.playUri.path ?: "")
+            val f = java.io.File(session.playUri.path ?: "")
+            while (waited < 12_000) {
                 if (f.exists() && f.length() > 0) break
+                if (!timeshift.isRecording && waited > 2_000) break
                 delay(250); waited += 250
+            }
+            if (!(f.exists() && f.length() > 0)) {
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: nothing recorded after ${waited / 1000}s; back to live")
+                com.nuvio.tv.livetv.record.LiveTvNotice.show("This channel couldn't be recorded to pause it, so it's back to live")
+                goLive()
+                return@launch
             }
             // Both kinds are a local playlist of pieces now (TS streams are cut up as recorded).
             val source = localRecordingSource(session.playUri)
@@ -305,7 +334,9 @@ class LiveTvPlaybackController @Inject constructor(
             .setUri(uri)
             .setMimeType(MimeTypes.APPLICATION_M3U8)
             .setLiveConfiguration(
-                MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build()
+                // "Live" here means a few seconds behind the newest piece (not 3 target lengths).
+                MediaItem.LiveConfiguration.Builder().setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f)
+                    .setTargetOffsetMs(8_000).build()
             )
             .build()
         return androidx.media3.exoplayer.hls.HlsMediaSource.Factory(androidx.media3.datasource.DefaultDataSource.Factory(context))
@@ -340,6 +371,7 @@ class LiveTvPlaybackController @Inject constructor(
 
     private fun stopShift() {
         alwaysBuffer = false
+        shiftReloads = 0
         shiftJob?.cancel()
         shiftJob = null
         if (_shiftStartedAt.value != null || timeshift.session != null) timeshift.stop()
@@ -895,6 +927,17 @@ class LiveTvPlaybackController @Inject constructor(
                 error = if (playbackState == Player.STATE_READY) null else _state.value.error,
                 reconnectAttempt = if (playbackState == Player.STATE_READY) 0 else _state.value.reconnectAttempt
             )
+            if (playbackState == Player.STATE_ENDED && _shiftStartedAt.value != null && timeshift.isRecording) {
+                // Caught up with the end of what's recorded while it's still recording: carry on
+                // from here (the newest pieces come in), rather than dropping back to live.
+                reloadShiftAt(_player?.currentPosition ?: 0L, "reached the end of the buffer")
+                return
+            }
+            if (playbackState == Player.STATE_ENDED && _shiftStartedAt.value != null && !alwaysBuffer) {
+                com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Pause buffer: playback ended (recording stopped); back to live")
+                goLive()
+                return
+            }
             if (playbackState == Player.STATE_ENDED && _shiftStartedAt.value != null && alwaysBuffer) {
                 // The buffer stopped coming in (the stream dropped): start over, or play directly
                 // if it fails straight away.
@@ -922,6 +965,12 @@ class LiveTvPlaybackController @Inject constructor(
 
         override fun onPlayerError(error: PlaybackException) {
             // A recording that failed: back to live rather than reconnecting to nowhere.
+            if (_shiftStartedAt.value != null && timeshift.isRecording && shiftReloads < 5) {
+                // A hiccup reading the buffer (it's still recording): pick up where it was.
+                Log.w(TAG, "Buffer playback error; reloading", error)
+                reloadShiftAt(_player?.currentPosition ?: 0L, error.errorCodeName)
+                return
+            }
             if (_shiftStartedAt.value != null && alwaysBuffer) {
                 Log.w(TAG, "Buffer playback failed", error)
                 if (System.currentTimeMillis() - bufferStartedAt < 20_000) bufferFailed() else goLiveFresh()
