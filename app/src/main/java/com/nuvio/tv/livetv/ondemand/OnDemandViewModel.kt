@@ -343,7 +343,8 @@ class OnDemandViewModel @Inject constructor(
                     defaultName = c.name,
                     name = user.vodGroupNames[c.uid]?.takeIf { it.isNotBlank() } ?: c.name,
                     visible = c.uid !in user.vodHiddenCategories,
-                    kind = c.kind
+                    kind = c.kind,
+                    sort = user.vodSorts[c.uid]
                 )
             }
             val visible = ordered.filter { c ->
@@ -352,9 +353,11 @@ class OnDemandViewModel @Inject constructor(
             }
             homeGroups = visible.map { it to (user.vodGroupNames[it.uid]?.takeIf { n -> n.isNotBlank() } ?: it.name) }
             homeItems.clear(); homeEnded.clear()
+            homeSorts = user.vodSorts
             // The first page of every group (each a quick read from the device's catalog).
             for ((c, _) in homeGroups) {
-                val page = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, 0, merge = settings.value.vodMergeDuplicates)
+                val (sort, seed) = sortOf(c.uid)
+                val page = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, 0, sort, merge = settings.value.vodMergeDuplicates, seed = seed)
                 primePosters(page)
                 homeItems[c.uid] = page
                 if (page.size < HOME_PAGE) homeEnded += c.uid
@@ -373,7 +376,8 @@ class OnDemandViewModel @Inject constructor(
         viewModelScope.launch {
           try {
             val have = homeItems[uid].orEmpty()
-            val more = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, have.size, merge = settings.value.vodMergeDuplicates)
+            val (sort, seed) = sortOf(uid)
+            val more = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, have.size, sort, merge = settings.value.vodMergeDuplicates, seed = seed)
             if (more.size < HOME_PAGE) homeEnded += uid
             primePosters(more)
             homeItems[uid] = have + more
@@ -384,6 +388,42 @@ class OnDemandViewModel @Inject constructor(
     }
 
     private val homeLoadingMore = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    // ------------------------------------------------------------------ sorting
+
+    /** The sort picked for each group (saved), as last loaded. */
+    @Volatile private var homeSorts: Map<String, String> = emptyMap()
+
+    /** A group's sort: the one picked for it, else Default Sort Order from Settings. */
+    private fun sortOf(uid: String): Pair<VodSort, Long> =
+        VodSort.parse(homeSorts[uid]) ?: VodSort.parse(settings.value.vodDefaultSort) ?: (VodSort.DEFAULT to 1L)
+
+    /** What a group is sorted by right now (for the Sort button). */
+    fun currentSort(uid: String): VodSort = sortOf(uid).first
+
+    /** The default sort's name, for "Default (…)" in the sort list. */
+    fun defaultSortLabel(): String = (VodSort.parse(settings.value.vodDefaultSort)?.first ?: VodSort.DEFAULT).label
+
+    /**
+     * Sort picked for one group (null = back to the default). Saved for this profile, and the
+     * group's row (and its See all) loads again from the top in the new order.
+     */
+    fun setGroupSort(uid: String, sort: VodSort?) {
+        val saved = sort?.let { VodSort.encode(it) }
+        homeSorts = if (saved == null) homeSorts - uid else homeSorts + (uid to saved)
+        _home.value = _home.value.copy(groups = _home.value.groups.map { if (it.uid == uid) it.copy(sort = saved) else it })
+        viewModelScope.launch {
+            prefs.setVodSort(uid, saved)
+            val (c, _) = homeGroups.firstOrNull { it.first.uid == uid } ?: return@launch
+            val (s, seed) = sortOf(uid)
+            val page = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, 0, s, merge = settings.value.vodMergeDuplicates, seed = seed)
+            primePosters(page)
+            homeItems[uid] = page
+            if (page.size < HOME_PAGE) homeEnded += uid else homeEnded -= uid
+            updateHomeRows()
+            enrichHome()
+        }
+    }
     private var seeAllJob: kotlinx.coroutines.Job? = null
 
     /** "See all" on a row: proper posters and names for every title in it, not just the first few. */
@@ -588,6 +628,7 @@ class OnDemandViewModel @Inject constructor(
                 order = entries.map { it.uid },
                 names = entries.filter { it.name.isNotBlank() && it.name != it.defaultName }.associate { it.uid to it.name }
             )
+            prefs.setVodSorts(entries.mapNotNull { e -> e.sort?.let { e.uid to it } }.toMap())
             loadHome()
         }
     }
@@ -596,6 +637,7 @@ class OnDemandViewModel @Inject constructor(
     fun resetGroups() {
         viewModelScope.launch {
             prefs.saveVodGroups(hidden = emptySet(), order = emptyList(), names = emptyMap())
+            prefs.setVodSorts(emptyMap())
             loadHome()
         }
     }

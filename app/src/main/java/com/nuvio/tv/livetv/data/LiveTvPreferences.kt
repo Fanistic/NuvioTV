@@ -66,6 +66,7 @@ class LiveTvPreferences @Inject constructor(
         val showRecentGroup = booleanPreferencesKey("show_recent_group")
         val compactRows = booleanPreferencesKey("compact_rows")
         val showProgramTimes = booleanPreferencesKey("show_program_times")
+        val stripeMissingGuide = booleanPreferencesKey("stripe_missing_guide")
         val epgOffset = intPreferencesKey("epg_offset_minutes")
         val reverseZap = booleanPreferencesKey("reverse_zap")
         val zapMode = stringPreferencesKey("zap_mode")
@@ -108,6 +109,8 @@ class LiveTvPreferences @Inject constructor(
         val audioPassthrough = booleanPreferencesKey("audio_passthrough")
         val showPosters = booleanPreferencesKey("show_posters")
         val vodMergeDuplicates = booleanPreferencesKey("vod_merge_duplicates")
+        val vodDefaultSort = stringPreferencesKey("vod_default_sort")
+        val vodSorts = stringPreferencesKey("vod_sorts")
         val homeRowEnabled = booleanPreferencesKey("home_row_enabled")
         val homeRowHiddenProfiles = stringSetPreferencesKey("home_row_hidden_profiles")
         val homeRowAboveContinueWatching = booleanPreferencesKey("home_row_above_cw")
@@ -161,7 +164,7 @@ class LiveTvPreferences @Inject constructor(
     private val personalStringKeys: List<Preferences.Key<String>> = listOf(
         Keys.favorites, Keys.recent, Keys.lastChannel, Keys.previousChannel, Keys.lastGroup,
         Keys.groupOrder, Keys.customGroups, Keys.channelOrder, Keys.channelCopies, Keys.reminders,
-        Keys.vodGroupOrder
+        Keys.vodGroupOrder, Keys.vodSorts
     )
     private val personalSetKeys: List<Preferences.Key<Set<String>>> = listOf(
         Keys.hiddenChannels, Keys.hiddenGroups, Keys.vodHiddenCategories
@@ -237,6 +240,7 @@ class LiveTvPreferences @Inject constructor(
             showRecentGroup = p[Keys.showRecentGroup] ?: d.showRecentGroup,
             compactRows = p[Keys.compactRows] ?: d.compactRows,
             showProgramTimes = p[Keys.showProgramTimes] ?: d.showProgramTimes,
+            stripeMissingGuide = p[Keys.stripeMissingGuide] ?: d.stripeMissingGuide,
             epgOffsetMinutes = p[Keys.epgOffset] ?: d.epgOffsetMinutes,
             reverseZap = p[Keys.reverseZap] ?: d.reverseZap,
             zapMode = p[Keys.zapMode]?.let { runCatching { ZapMode.valueOf(it) }.getOrNull() } ?: d.zapMode,
@@ -279,6 +283,7 @@ class LiveTvPreferences @Inject constructor(
             audioPassthrough = p[Keys.audioPassthrough] ?: d.audioPassthrough,
             showPosters = p[Keys.showPosters] ?: d.showPosters,
             vodMergeDuplicates = p[Keys.vodMergeDuplicates] ?: d.vodMergeDuplicates,
+            vodDefaultSort = p[Keys.vodDefaultSort] ?: d.vodDefaultSort,
             // The row used to be on/off for the whole app. Turned off before (with no per-profile
             // choice saved yet): that was done from the main profile, so it stays off there only.
             homeRowEnabled = true,
@@ -327,7 +332,8 @@ class LiveTvPreferences @Inject constructor(
             channelQuality = decodeStringMap(d[Keys.channelQuality] ?: p[Keys.channelQuality]),
             vodHiddenCategories = p[Keys.vodHiddenCategories] ?: emptySet(),
             vodGroupOrder = decodeStringList(p[Keys.vodGroupOrder]),
-            vodGroupNames = decodeStringMap(p[Keys.vodGroupNames])
+            vodGroupNames = decodeStringMap(p[Keys.vodGroupNames]),
+            vodSorts = decodeStringMap(p[Keys.vodSorts])
         )
     }.distinctUntilChanged()
 
@@ -363,6 +369,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.showRecentGroup] = s.showRecentGroup
         p[Keys.compactRows] = s.compactRows
         p[Keys.showProgramTimes] = s.showProgramTimes
+        p[Keys.stripeMissingGuide] = s.stripeMissingGuide
         p[Keys.epgOffset] = s.epgOffsetMinutes
         p[Keys.reverseZap] = s.reverseZap
         p[Keys.zapMode] = s.zapMode.name
@@ -405,6 +412,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.audioPassthrough] = s.audioPassthrough
         p[Keys.showPosters] = s.showPosters
         p[Keys.vodMergeDuplicates] = s.vodMergeDuplicates
+        p[Keys.vodDefaultSort] = s.vodDefaultSort
         p[Keys.homeRowEnabled] = s.homeRowEnabled
         p[Keys.homeRowHiddenProfiles] = s.homeRowHiddenProfiles.map { it.toString() }.toSet()
         p[Keys.homeRowAboveContinueWatching] = s.homeRowAboveContinueWatching
@@ -546,6 +554,20 @@ class LiveTvPreferences @Inject constructor(
             m[key] = quality
             p[Keys.channelQuality] = encodeStringMap(m)
         }
+    }
+
+    /** On Demand: one category's sort (null = back to the default sort). */
+    suspend fun setVodSort(uid: String, sort: String?) {
+        store.edit { p ->
+            val m = decodeStringMap(profileView(p, currentProfile)[Keys.vodSorts]).toMutableMap()
+            if (sort == null) m.remove(uid) else m[uid] = sort
+            p[my(Keys.vodSorts)] = encodeStringMap(m)
+        }
+    }
+
+    /** On Demand: every category's sort at once (Manage VOD Groups → Done). */
+    suspend fun setVodSorts(sorts: Map<String, String>) {
+        store.edit { p -> p[my(Keys.vodSorts)] = encodeStringMap(sorts) }
     }
 
     /** Manage VOD Groups: which groups show, their order and names, saved together (Done). */

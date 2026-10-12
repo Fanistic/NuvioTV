@@ -94,6 +94,8 @@ fun OnDemandHomeScreen(
     var providerItem by remember { mutableStateOf<VodItem?>(null) }
     // "See all" on a row: that row in Nuvio's See all grid, over this page.
     var seeAllUid by remember { mutableStateOf<String?>(null) }
+    // The Sort list over See all.
+    var sortingUid by remember { mutableStateOf<String?>(null) }
     var opening by remember { mutableStateOf(false) }
     var focusState by remember { mutableStateOf(HomeScreenFocusState()) }
     var gridFocusState by remember { mutableStateOf(HomeScreenFocusState()) }
@@ -285,7 +287,12 @@ fun OnDemandHomeScreen(
                     onOpen = { open(it) },
                     onFocus = onItemFocus,
                     onLoadMore = { seeAllUid?.let { viewModel.loadMoreHome(it) } },
-                    onBack = { viewModel.stopSeeAll(); seeAllUid = null }
+                    onBack = { viewModel.stopSeeAll(); seeAllUid = null },
+                    // The group's own sort, else Default Sort Order.
+                    sortLabel = seeAllUid?.let { uid ->
+                        sortLabel(state.groups.firstOrNull { it.uid == uid }?.sort) ?: viewModel.defaultSortLabel()
+                    },
+                    onSort = { sortingUid = seeAllUid }
                 )
             }
             else -> when (ui.homeLayout) {
@@ -392,9 +399,21 @@ fun OnDemandHomeScreen(
 
     }
 
+    sortingUid?.let { uid ->
+        val saved = state.groups.firstOrNull { it.uid == uid }?.sort
+        VodSortPicker(
+            title = "Sort " + (state.rows.firstOrNull { it.catalogId == uid }?.catalogName ?: "this group"),
+            current = VodSort.parse(saved)?.first,
+            useDefaultLabel = "Default (${viewModel.defaultSortLabel()})",
+            onPick = { picked -> sortingUid = null; viewModel.setGroupSort(uid, picked) },
+            onDismiss = { sortingUid = null }
+        )
+    }
+
     if (showManage) {
         ManageVodGroupsPanel(
             groups = state.groups,
+            defaultSortLabel = viewModel.defaultSortLabel(),
             onDone = { edited -> showManage = false; viewModel.saveGroups(edited) },
             onReset = { showManage = false; viewModel.resetGroups() },
             onDismiss = { showManage = false }

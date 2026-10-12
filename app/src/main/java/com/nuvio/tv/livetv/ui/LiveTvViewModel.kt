@@ -746,10 +746,19 @@ class LiveTvViewModel @Inject constructor(
     /** Assign EPG changes waiting to be applied (all at once, when the panel closes). */
     @Volatile private var epgChangesPending = false
 
-    fun setChannelEpg(channel: LiveChannel, sourceId: String, xmltvId: String) = viewModelScope.launch {
-        prefs.setEpgOverride(channel.key, com.nuvio.tv.livetv.model.EpgAssignment(sourceId, xmltvId))
+    /** What changed in Assign EPG since the last commit: channel key -> new guide (null = automatic). */
+    private val pendingEpg = HashMap<String, com.nuvio.tv.livetv.model.EpgAssignment?>()
+
+    private fun notePendingEpg(key: String, a: com.nuvio.tv.livetv.model.EpgAssignment?) {
+        synchronized(pendingEpg) { pendingEpg[key] = a }
         epgChangesPending = true
         scheduleEpgCommit()
+    }
+
+    fun setChannelEpg(channel: LiveChannel, sourceId: String, xmltvId: String) = viewModelScope.launch {
+        val a = com.nuvio.tv.livetv.model.EpgAssignment(sourceId, xmltvId)
+        prefs.setEpgOverride(channel.key, a)
+        notePendingEpg(channel.key, a)
     }
 
     private var epgCommitJob: kotlinx.coroutines.Job? = null
@@ -774,7 +783,9 @@ class LiveTvViewModel @Inject constructor(
     fun commitEpgChanges() {
         if (!epgChangesPending) return
         epgChangesPending = false
-        repository.rematchEpg()
+        val changes = synchronized(pendingEpg) { HashMap(pendingEpg).also { pendingEpg.clear() } }
+        // Only the changed channels are updated (see applyEpgChanges); full re-match otherwise.
+        if (changes.isEmpty()) repository.rematchEpg() else repository.applyEpgChanges(changes)
     }
 
     override fun onCleared() {
@@ -787,8 +798,7 @@ class LiveTvViewModel @Inject constructor(
 
     fun resetChannelEpg(channel: LiveChannel) = viewModelScope.launch {
         prefs.setEpgOverride(channel.key, null)
-        epgChangesPending = true
-        scheduleEpgCommit()
+        notePendingEpg(channel.key, null)
     }
 
     /**
@@ -798,9 +808,9 @@ class LiveTvViewModel @Inject constructor(
      */
     fun unassignChannelEpg(channel: LiveChannel) = viewModelScope.launch {
         val cur = prefs.userState.first().epgOverrides[channel.key]
-        prefs.setEpgOverride(channel.key, if (cur?.isNone == true) null else com.nuvio.tv.livetv.model.EpgAssignment.None)
-        epgChangesPending = true
-        scheduleEpgCommit()
+        val next = if (cur?.isNone == true) null else com.nuvio.tv.livetv.model.EpgAssignment.None
+        prefs.setEpgOverride(channel.key, next)
+        notePendingEpg(channel.key, next)
     }
 
     /** The poster Nuvio's catalogs would show for this program, or null if there's no good match. */
@@ -879,7 +889,8 @@ class LiveTvViewModel @Inject constructor(
     private fun showNames247(channel: LiveChannel, programTitle: String?): List<String> =
         listOfNotNull(channel.name, programTitle?.takeIf { !LiveTvRepository.isPlaceholderTitle(it) }, channel.tvgName)
             .map { com.nuvio.tv.livetv.data.LiveTvPosterResolver.showNameOf(it) }
-            .filter { it.length >= 2 }
+            // "Netflix Drama", "Horror Movies": only a genre, so no show or film to look up.
+            .filter { it.length >= 2 && !com.nuvio.tv.livetv.data.LiveTvPosterResolver.isGenericName(it) }
             .distinctBy { LiveTvRepository.normalize(it) }
 
     /**

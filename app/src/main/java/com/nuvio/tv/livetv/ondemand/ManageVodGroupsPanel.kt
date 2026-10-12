@@ -51,7 +51,7 @@ import com.nuvio.tv.livetv.ui.LiveText
 import com.nuvio.tv.ui.theme.NuvioTheme
 
 /** The parts of a group's line, left to right. */
-private enum class GroupControl { TOGGLE, RENAME, UP, DOWN }
+private enum class GroupControl { TOGGLE, SORT, RENAME, UP, DOWN }
 
 /** Where the highlight is: a control on a group's line, or one of the two buttons at the bottom. */
 private sealed interface PanelSpot {
@@ -69,6 +69,8 @@ private sealed interface PanelSpot {
 @Composable
 internal fun ManageVodGroupsPanel(
     groups: List<VodGroupEntry>,
+    /** Default Sort Order's name, shown on groups that follow it. */
+    defaultSortLabel: String = VodSort.DEFAULT.label,
     onDone: (List<VodGroupEntry>) -> Unit,
     onReset: () -> Unit,
     onDismiss: () -> Unit
@@ -77,6 +79,7 @@ internal fun ManageVodGroupsPanel(
     val edited = remember(groups) { mutableStateListOf<VodGroupEntry>().apply { addAll(groups) } }
     var spot by remember { mutableStateOf<PanelSpot>(PanelSpot.Line(0, GroupControl.TOGGLE)) }
     var renaming by remember { mutableStateOf<Int?>(null) }
+    var sorting by remember { mutableStateOf<Int?>(null) }
     val listState = rememberLazyListState()
     val keys = remember { FocusRequester() }
 
@@ -97,6 +100,7 @@ internal fun ManageVodGroupsPanel(
                 val g = edited.getOrNull(i) ?: return
                 when (s.control) {
                     GroupControl.TOGGLE -> edited[i] = g.copy(visible = !g.visible)
+                    GroupControl.SORT -> sorting = i
                     GroupControl.RENAME -> renaming = i
                     GroupControl.UP -> if (i > 0) {
                         edited.removeAt(i); edited.add(i - 1, g); spot = s.copy(index = i - 1)
@@ -116,7 +120,7 @@ internal fun ManageVodGroupsPanel(
             Column(
                 modifier = Modifier
                     .padding(24.dp)
-                    .width(440.dp)
+                    .width(500.dp)
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(16.dp))
                     .background(colors.BackgroundElevated)
@@ -125,7 +129,7 @@ internal fun ManageVodGroupsPanel(
                     .focusRequester(keys)
                     .focusable()
                     .onPreviewKeyEvent { e ->
-                        if (renaming != null) return@onPreviewKeyEvent false
+                        if (renaming != null || sorting != null) return@onPreviewKeyEvent false
                         if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent e.key != Key.Back
                         val s = spot
                         val last = edited.lastIndex
@@ -167,7 +171,7 @@ internal fun ManageVodGroupsPanel(
                 LiveText("Manage VOD Groups", size = 22.sp, weight = FontWeight.Bold, color = colors.TextPrimary)
                 Spacer(Modifier.height(6.dp))
                 LiveText(
-                    "Show, hide, rename and reorder the groups on this page.",
+                    "Show, hide, sort, rename and reorder the groups on this page.",
                     size = 13.sp, color = colors.TextSecondary
                 )
                 Spacer(Modifier.height(14.dp))
@@ -189,6 +193,12 @@ internal fun ManageVodGroupsPanel(
                                 LiveText(g.name, size = 15.sp, maxLines = 1, color = if (g.visible) colors.TextPrimary else colors.TextSecondary)
                                 LiveText(if (g.kind == VodKind.SERIES) "Series" else "Movies", size = 11.sp, color = colors.TextTertiary)
                             }
+                            SortChip(
+                                label = sortLabel(g.sort) ?: "Default",
+                                custom = g.sort != null,
+                                focused = onLine && lineSpot?.control == GroupControl.SORT
+                            )
+                            Spacer(Modifier.width(6.dp))
                             IconSquare(Icons.Default.Edit, onLine && lineSpot?.control == GroupControl.RENAME)
                             Spacer(Modifier.width(6.dp))
                             IconSquare(Icons.Default.KeyboardArrowUp, onLine && lineSpot?.control == GroupControl.UP, enabled = i > 0)
@@ -204,6 +214,21 @@ internal fun ManageVodGroupsPanel(
                 }
             }
         }
+    }
+
+    sorting?.let { i ->
+        val g = edited.getOrNull(i)
+        if (g == null) { sorting = null } else VodSortPicker(
+            title = "Sort " + g.name,
+            current = VodSort.parse(g.sort)?.first,
+            useDefaultLabel = "Default ($defaultSortLabel)",
+            onPick = { picked ->
+                edited[i] = g.copy(sort = picked?.let { VodSort.encode(it) })
+                sorting = null
+                runCatching { keys.requestFocus() }
+            },
+            onDismiss = { sorting = null; runCatching { keys.requestFocus() } }
+        )
     }
 
     renaming?.let { i ->
@@ -281,5 +306,34 @@ private fun PanelButton(label: String, primary: Boolean, focused: Boolean, modif
         contentAlignment = Alignment.Center
     ) {
         LiveText(label, size = 15.sp, weight = FontWeight.SemiBold, color = if (focused) colors.Background else colors.TextPrimary)
+    }
+}
+
+/** The group's sort on its line ("A–Z", or "Default" when it follows Default Sort Order). */
+@Composable
+private fun SortChip(label: String, custom: Boolean, focused: Boolean) {
+    val colors = NuvioTheme.colors
+    Box(
+        modifier = Modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                when {
+                    focused -> colors.FocusRing
+                    custom -> colors.Secondary.copy(alpha = 0.3f)
+                    else -> Color.White.copy(alpha = 0.08f)
+                }
+            )
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        LiveText(
+            label, size = 12.sp, weight = FontWeight.SemiBold, maxLines = 1,
+            color = when {
+                focused -> colors.Background
+                custom -> colors.TextPrimary
+                else -> colors.TextSecondary
+            }
+        )
     }
 }

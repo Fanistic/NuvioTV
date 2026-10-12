@@ -17,7 +17,15 @@ data class VodHomeState(
 )
 
 /** One group as Manage VOD Groups shows it. */
-data class VodGroupEntry(val uid: String, val defaultName: String, val name: String, val visible: Boolean, val kind: VodKind)
+data class VodGroupEntry(
+    val uid: String,
+    val defaultName: String,
+    val name: String,
+    val visible: Boolean,
+    val kind: VodKind,
+    /** The sort picked for this group (VodSort name), or null to follow the default sort. */
+    val sort: String? = null
+)
 
 /** Ids and markers that tie Nuvio's rows and cards back to On Demand. */
 object VodHomeIds {

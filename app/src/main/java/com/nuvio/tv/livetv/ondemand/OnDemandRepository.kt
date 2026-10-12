@@ -185,7 +185,11 @@ class OnDemandRepository @Inject constructor(
     suspend fun refresh(force: Boolean, onlyId: String? = null) = mutex.withLock {
         val playlists = prefs.playlists.first().filter { it.enabled && it.isXtream && it.importVod }
         val keep = playlists.map { it.id }.toSet()
-        runCatching { db.removeExcept(keep) }
+        val dropped = runCatching { db.removeExcept(keep) }.getOrDefault(emptySet())
+        // A provider switched off forgets when it was last imported, so switching it back on
+        // imports it again straight away (it used to wait up to a day, with On Demand gone from
+        // the menu in the meantime).
+        dropped.forEach { prefs.setOnDemandImportTime(it, 0L) }
         val stamps = prefs.onDemandImportTimes()
         val now = System.currentTimeMillis()
         for (pl in playlists) {
@@ -426,9 +430,9 @@ class OnDemandRepository @Inject constructor(
         runCatching { db.categories(kind) }.getOrDefault(emptyList())
     }
 
-    suspend fun items(kind: VodKind, category: VodCategory?, hidden: Set<String>, newestFirst: Boolean, limit: Int, offset: Int, sort: VodSort = VodSort.DEFAULT, genre: String? = null, merge: Boolean = true) =
+    suspend fun items(kind: VodKind, category: VodCategory?, hidden: Set<String>, newestFirst: Boolean, limit: Int, offset: Int, sort: VodSort = VodSort.DEFAULT, genre: String? = null, merge: Boolean = true, seed: Long = 0) =
         withContext(Dispatchers.IO) {
-            runCatching { db.items(kind, category, hidden, newestFirst, limit, offset, sort, genre, merge) }.getOrDefault(emptyList())
+            runCatching { db.items(kind, category, hidden, newestFirst, limit, offset, sort, genre, merge, seed) }.getOrDefault(emptyList())
         }
 
     /** One version of a title you can pick: where it's from and what it is. */

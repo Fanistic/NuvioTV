@@ -182,6 +182,8 @@ class LiveTvPosterResolver @Inject constructor(
     suspend fun posterFor(programTitle: String, hint: TypeHint? = null, cluesIn: Clues = Clues(), urgent: Boolean = true): String? {
         // "Programming" and the like aren't shows: the channel logo is the right picture.
         if (LiveTvRepository.isPlaceholderTitle(programTitle)) return null
+        // "Netflix Drama", "Horror Movies", "Asian Kids Dubbed": a kind of thing, not a title.
+        if (isGenericName(programTitle)) return null
         // A year in the title ("American Pie: Reunion (2012)") is used as the year clue.
         val clues = if (cluesIn.year == null) LiveTvSearchBridge.yearInTitle(programTitle)?.let { cluesIn.copy(year = it) } ?: cluesIn else cluesIn
         val query = LiveTvSearchBridge.cleanTitle(programTitle).ifBlank { programTitle.trim() }
@@ -420,7 +422,7 @@ class LiveTvPosterResolver @Inject constructor(
      */
     suspend fun aboutTitle(name: String, urgent: Boolean = true): MetaPreview? {
         val key = normalize(name)
-        if (key.length < 2 || key in aboutMisses) return null
+        if (key.length < 2 || key in aboutMisses || isGenericName(name)) return null
         aboutCache[key]?.let { return it.meta }
         val attempt = Attempt()
         var finished = false
@@ -634,6 +636,74 @@ class LiveTvPosterResolver @Inject constructor(
         private val SHOW_NOISE = Regex("""(?i)\b(fhd|uhd|hd|sd|4k|hevc|h265|live|tv|channel|marathon|non\s*-?\s*stop|all\s+episodes)\b""")
         private val SHOW_PUNCT = Regex("""[\[\](){}|:•·\-]+""")
         private val SPACES = Regex("""\s+""")
+
+        /**
+         * Words that only say what kind of thing is on (genres, languages, services, "movies",
+         * "TV"...), never which show or film. A name made only of these ("Netflix Drama",
+         * "24/7 Horror Movies", "Asian Kids Dubbed", "80s Action") has no poster to find:
+         * searching it only turned up some random film that happens to be called "Drama".
+         * Words that are also big film titles or series (Alien, Halloween, Ghost, Monster,
+         * Zombie, Vampire) are left out on purpose, so "24/7 Alien" still finds the films.
+         */
+        private val GENERIC_WORDS: Set<String> = (
+            // Genres and kinds of programme
+            "action adventure animation animated anime animes biography biopic biopics comedy comedies crime " +
+            "documentary documentaries docs docu doc drama dramas family fantasy history historical horror " +
+            "music musical musicals mystery mysteries romance romantic romcom romcoms scifi science fiction " +
+            "sport sports thriller thrillers war wars western westerns kids kid children childrens teen teens " +
+            "cartoon cartoons toons classic classics cult noir holiday holidays christmas xmas halloween " +
+            "martial arts kungfu kung fu disaster disasters superhero superheroes " +
+            "spy spies heist psychological suspense slasher slashers indie independent foreign grindhouse " +
+            "exploitation bmovie bmovies reality nature wildlife food cooking travel standup sitcom " +
+            "sitcoms soap soaps telenovela telenovelas novela novelas shorts truecrime " +
+            "faith christian religious inspirational erotic adult mature lgbt lgbtq urban " +
+            "spaghetti samurai wuxia paranormal " +
+            "supernatural epic epics period costume political legal " +
+            "medical police cop cops detective detectives procedural cgi stopmotion " +
+            "preschool toddler toddlers educational learning gameshow gameshows quiz " +
+            "talk news weather lifestyle fashion diy science tech motorsport motorsports racing " +
+            "fishing hunting outdoor outdoors fitness wrestling boxing mma " +
+            // Languages, regions and versions
+            "asian asia japanese japan chinese china korean korea kdrama kdramas cdrama jdrama indian india " +
+            "bollywood tollywood kollywood hindi tamil telugu punjabi pakistani urdu bengali filipino pinoy thai " +
+            "vietnamese indonesian malay latino latin latina spanish espanol español mexican french francais " +
+            "français german deutsch italian italiano portuguese brazilian turkish arabic arab persian greek russian " +
+            "polish dutch nordic scandinavian swedish danish norwegian finnish irish scottish british english " +
+            "american african nigerian nollywood caribbean european euro international world global " +
+            "dubbed dub dubs subbed sub subs subtitled subtitles multi multisub vostfr vf vo lat castellano " +
+            // Services and networks (on their own they name no show)
+            "netflix hbo max amazon prime video disney hulu paramount peacock apple showtime starz cinemax epix " +
+            "mgm amc fx fxx tnt tbs sky bbc itv plex pluto tubi roku freevee crackle vudu redbox xumo fox abc nbc " +
+            "cbs lifetime hallmark syfy ifc sundance tcm britbox acorn shudder crunchyroll funimation mubi " +
+            "criterion nickelodeon nick cartoonnetwork boomerang discovery tlc hgtv a&e ae bravo usa " +
+            "showmax canal canalplus rtl zdf ard rai mediaset viaplay stan binge foxtel crave cbc " +
+            "original originals exclusive exclusives " +
+            // Plain describing words
+            "movie movies film films cinema cine flix flicks flick series show shows tv television channel " +
+            "channels network station stream streaming vod ppv live 24 7 247 hd fhd uhd sd 4k hdr hevc new " +
+            "newest latest recent best top greatest hits popular trending favourite favorite favourites " +
+            "favorites mix mixed collection collections box office blockbuster blockbusters premiere premieres " +
+            "release releases plus vip all nonstop marathon marathons retro golden era " +
+            "decade decades oscar oscars award awards winner winners winning acclaimed " +
+            "the a an of and n & in on for with us uk ca au en eng"
+        ).split(' ').filter { it.isNotBlank() }.toSet()
+
+        private val GENERIC_SPLIT = Regex("""[^\p{L}\p{N}&]+""")
+        private val DECADE = Regex("""^(?:19|20)?\d0s$""")      // 80s, 1980s
+        private val NUMBER = Regex("""^\d{1,3}$""")              // "Horror 2", "Action 1"
+
+        /** True when [raw] is only genre / language / service words, so there's no title in it. */
+        fun isGenericName(raw: String): Boolean {
+            val text = showNameOf(raw).lowercase()
+                .replace("sci-fi", "scifi").replace("sci fi", "scifi").replace("science fiction", "scifi")
+                .replace("kung-fu", "kungfu").replace("b-movie", "bmovie").replace("true crime", "truecrime")
+                .replace("rom-com", "romcom").replace("k-drama", "kdrama").replace("stand-up", "standup")
+                .replace("stand up", "standup").replace("cartoon network", "cartoonnetwork")
+                .replace("martial arts", "martial")
+            val words = text.split(GENERIC_SPLIT).filter { it.isNotBlank() }
+            if (words.isEmpty()) return true
+            return words.all { it in GENERIC_WORDS || it == "martial" || DECADE.matches(it) || NUMBER.matches(it) }
+        }
 
         /** "US: 24/7 South Park HD" -> "South Park" (what a 24/7 channel plays). */
         fun showNameOf(raw: String): String =

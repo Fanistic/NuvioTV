@@ -2033,17 +2033,26 @@ private fun GuideRow(
             // (Also while the highlight is on the channel itself: a show lights up then too, and
             // the empty row showed a half-hour "No information" block instead.)
             val emptyRowFocused = visible.isEmpty() && focusColumn != null
+            // "Mark Channels Without Guide Info" off: no stripes, and the empty row looks like an
+            // ordinary show named after the channel.
+            val striped = settings.stripeMissingGuide
             if (visible.isEmpty()) {
-                val emptyColors = liveCellColors(focused = emptyRowFocused, idle = guideSurface().copy(alpha = 0.55f))
+                val emptyColors = liveCellColors(
+                    focused = emptyRowFocused,
+                    idle = if (striped) guideSurface().copy(alpha = 0.55f) else guideSurface()
+                )
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 3.dp)
                         .clip(cellShape)
                         .background(emptyColors.background)
-                        .noGuideStripes(
-                            if (emptyRowFocused) NuvioTheme.colors.Secondary.copy(alpha = 0.10f)
-                            else guideSurfaceVariant().copy(alpha = 0.45f)
+                        .then(
+                            if (!striped) Modifier
+                            else Modifier.noGuideStripes(
+                                if (emptyRowFocused) NuvioTheme.colors.Secondary.copy(alpha = 0.10f)
+                                else guideSurfaceVariant().copy(alpha = 0.45f)
+                            )
                         )
                         .border(2.dp, emptyColors.border, cellShape)
                         .padding(horizontal = 12.dp),
@@ -2053,9 +2062,9 @@ private fun GuideRow(
                         // The channel's name, so you can see what the row is (24/7 channels'
                         // names also say what's on).
                         text = channel.name,
-                        color = if (emptyRowFocused) emptyColors.text else NuvioTheme.colors.TextTertiary,
+                        color = if (emptyRowFocused || !striped) emptyColors.text else NuvioTheme.colors.TextTertiary,
                         fontSize = 14.sp,
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        fontStyle = if (striped) androidx.compose.ui.text.font.FontStyle.Italic else androidx.compose.ui.text.font.FontStyle.Normal,
                         fontWeight = if (emptyRowFocused) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1
                     )
@@ -2083,18 +2092,18 @@ private fun GuideRow(
                                 .fillMaxHeight()
                                 .padding(horizontal = 3.dp)
                                 .clip(cellShape)
-                                .background(guideSurface().copy(alpha = 0.55f))
-                                .noGuideStripes(guideSurfaceVariant().copy(alpha = 0.45f))
+                                .background(if (striped) guideSurface().copy(alpha = 0.55f) else guideSurface())
+                                .then(if (striped) Modifier.noGuideStripes(guideSurfaceVariant().copy(alpha = 0.45f)) else Modifier)
                                 .padding(horizontal = 12.dp),
                             contentAlignment = Alignment.CenterStart
                         ) {
                             // Something is on; the guide just doesn't say what.
                             if (gw > 90.dp) {
                                 androidx.compose.material3.Text(
-                                    text = "No information",
-                                    color = NuvioTheme.colors.TextTertiary,
+                                    text = if (striped) "No information" else channel.name,
+                                    color = if (striped) NuvioTheme.colors.TextTertiary else NuvioTheme.colors.TextPrimary,
                                     fontSize = 14.sp,
-                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                    fontStyle = if (striped) androidx.compose.ui.text.font.FontStyle.Italic else androidx.compose.ui.text.font.FontStyle.Normal,
                                     maxLines = 1
                                 )
                             }
@@ -2139,7 +2148,7 @@ private fun GuideRow(
                 val x = xOf(focusedBlock.startMs)
                 val w = (xOf(focusedBlock.stopMs) - x).coerceAtLeast(2.dp)
                 ProgramBlock(
-                    title = "No information", subtitle = null, x = x, width = w,
+                    title = if (settings.stripeMissingGuide) "No information" else channel.name, subtitle = null, x = x, width = w,
                     colors = liveCellColors(focused = true, idle = guideSurface()),
                     focused = true, progress = null, continuesLeft = false
                 )

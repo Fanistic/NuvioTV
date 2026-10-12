@@ -1228,6 +1228,80 @@ class LiveTvRepository @Inject constructor(
         PLACEHOLDER_TITLES.matches(title.trim().lowercase())
 
     /** Re-reads the cached guides, e.g. after an EPG assignment changed. No downloads. */
+    /**
+     * Assign EPG changes applied straight to the stored guide instead of reading every guide
+     * file again (which took as long as a full guide update, just to change one channel):
+     *  - Unassign: the channel's listings are simply dropped. Nothing is read.
+     *  - A guide channel picked by hand: only that one guide file is read, for just that channel.
+     *  - Back to automatic: the best match has to be found across every guide, so that one
+     *    still does the full re-match.
+     * [changes]: channel key -> its new assignment (null = back to automatic).
+     */
+    fun applyEpgChanges(changes: Map<String, EpgAssignment?>) {
+        if (changes.isEmpty()) return
+        scope.launch {
+            mutex.withLock {
+                val quick = guideInDb && changes.values.none { it == null } &&
+                    runCatching { applyEpgChangesQuick(changes) }
+                        .onFailure { Log.w(TAG, "Quick EPG change failed; full re-match", it) }
+                        .getOrDefault(false)
+                if (!quick) {
+                    setStatus(loading = true, message = "Updating guide…")
+                    buildPrograms(prefs.currentSettings(), collectEpgTargets())
+                }
+                _status.value = LiveTvStatus(loading = false, loadedOnce = true)
+            }
+        }
+    }
+
+    private suspend fun applyEpgChangesQuick(changes: Map<String, EpgAssignment?>): Boolean = withContext(Dispatchers.IO) {
+        val settings = prefs.currentSettings()
+        val targets = collectEpgTargets()
+        val now = System.currentTimeMillis()
+        val windowStart = now - settings.epgPastHours.coerceAtLeast(1) * HOUR
+        val windowEnd = now + settings.epgFutureDays.coerceAtLeast(1) * 24 * HOUR
+        val assigned = changes.filterValues { it != null && !it.isNone }.mapValues { it.value!! }
+        val newPrograms = HashMap<String, List<EpgProgram>>()
+        val newIcons = HashMap<String, String>()
+        for ((sourceId, group) in assigned.entries.groupBy { it.value.sourceId }) {
+            val target = targets.firstOrNull { it.fileId == sourceId } ?: return@withContext false
+            val file = epgFile(target.fileId)
+            if (!file.exists()) return@withContext false
+            val wanted = group.mapTo(HashSet()) { it.value.xmltvId }
+            setStatus(loading = true, message = "Reading guide \"${target.name}\"…")
+            val parsed = openMaybeGzip(file).use { input ->
+                XmltvParser.parse(input, windowStart, windowEnd) { wanted }
+            }
+            group.forEach { (key, a) ->
+                newPrograms[key] = cleanListings(parsed.programs[a.xmltvId].orEmpty())
+                parsed.channels[a.xmltvId]?.icon?.takeIf { it.isNotBlank() }?.let { newIcons[key] = it }
+            }
+        }
+        val changed = changes.keys
+        // Stored guide first, then what's on screen.
+        guideDb.replaceChannels(guideFingerprint(settings, targets), changed, newPrograms)
+        _programs.value = HashMap(_programs.value).apply {
+            changed.forEach { remove(it) }
+            newPrograms.forEach { (k, l) ->
+                val shown = l.filter { it.stopMs > loadedFrom && it.startMs < loadedTo }
+                if (shown.isNotEmpty()) put(k, shown)
+            }
+        }
+        _autoMatches.value = _autoMatches.value - changed
+        val logos = HashMap(_epgLogos.value).apply { changed.forEach { remove(it) }; putAll(newIcons) }
+        _epgLogos.value = logos
+        saveEpgLogos(logos)
+        // Keep the "already used" marks in Assign EPG up to date.
+        val used = assigned.values.groupBy({ it.sourceId }, { it.xmltvId })
+        if (used.isNotEmpty()) {
+            _epgSources.value = _epgSources.value.map { s ->
+                used[s.sourceId]?.let { ids -> s.copy(usedIds = s.usedIds + ids) } ?: s
+            }
+        }
+        LIVE_REPORT.add("Assign EPG: ${changed.size} channel(s) updated without re-reading every guide")
+        true
+    }
+
     fun rematchEpg() {
         scope.launch {
             mutex.withLock {

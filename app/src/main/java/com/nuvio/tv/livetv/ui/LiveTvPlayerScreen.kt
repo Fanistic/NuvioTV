@@ -523,7 +523,8 @@ fun LiveTvPlayerScreen(
                     focused = controlFocus,
                     captionsOn = captionsOn,
                     audioLabel = remember(playback.channelKey, bannerVisible) { viewModel.playback.audioLabel() },
-                    sizeLabel = aspectLabel(settings.aspectMode),
+                    // The same words as the Screen size list (Fit, Crop, Cinema Zoom…).
+                    sizeLabel = context.getString(aspectModeOf(settings.aspectMode).labelResId),
                     sleepLabel = sleepAt?.let { at -> "Sleep " + ((at - tick).coerceAtLeast(0) / 60_000 + 1) + "m" },
                     clock = formatClock(tick, use24h),
                     resolution = if (playback.videoHeight > 0) "${playback.videoHeight}p" else null,
@@ -1037,10 +1038,3 @@ private fun MatchFrameRate(enabled: Boolean, fps: Float) {
     }
 }
 
-/** The picture-size setting, short, for the panel. */
-private fun aspectLabel(name: String): String = when (name.lowercase()) {
-    "fit", "" -> "Fit"
-    "fill", "stretch" -> "Fill"
-    "zoom", "crop" -> "Zoom"
-    else -> name.replaceFirstChar { it.uppercase() }.take(10)
-}

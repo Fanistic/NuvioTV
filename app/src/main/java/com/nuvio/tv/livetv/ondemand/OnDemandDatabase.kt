@@ -19,20 +19,42 @@ private const val DUP_KEY = "CASE WHEN tmdb IS NOT NULL AND tmdb != '' THEN 't' 
 
 /** How On Demand lists are sorted (the bar above the posters). */
 enum class VodSort(val label: String) {
-    DEFAULT("Default"),
+    DEFAULT("Provider's Order"),
     NAME_AZ("A–Z"),
     NAME_ZA("Z–A"),
-    NEWEST("Newest"),
-    OLDEST("Oldest"),
-    RECENTLY_ADDED("Recently added");
+    NEWEST("Newest Release"),
+    OLDEST("Oldest Release"),
+    RECENTLY_ADDED("Recently Added"),
+    RATING("Highest Rated"),
+    SHUFFLE("Shuffle");
 
-    internal fun orderBy(fallback: String): String = when (this) {
+    /**
+     * The SQL order. Titles with no year (or no rating) go at the end, so they don't fill the
+     * top. [seed] picks the Shuffle order, which stays the same while you scroll.
+     */
+    internal fun orderBy(fallback: String, seed: Long = 0): String = when (this) {
         DEFAULT -> fallback
+        // Numbers and symbols sort before letters, so A–Z is #–Z and Z–A ends with them.
         NAME_AZ -> "norm ASC"
         NAME_ZA -> "norm DESC"
         NEWEST -> "year IS NULL, year DESC, added DESC"
-        OLDEST -> "year IS NULL, year ASC"
+        OLDEST -> "year IS NULL, year ASC, added ASC"
         RECENTLY_ADDED -> "added DESC"
+        RATING -> "(rating IS NULL OR rating = '' OR CAST(rating AS REAL) <= 0), CAST(rating AS REAL) DESC, norm ASC"
+        SHUFFLE -> "((rowid * 1103515245 + ${seed.coerceIn(1, 2_000_000_000)}) % 2147483647)"
+    }
+
+    companion object {
+        /** A saved choice: "NAME_AZ", or "SHUFFLE:<seed>" (each pick of Shuffle is a new order). */
+        fun parse(saved: String?): Pair<VodSort, Long>? {
+            if (saved.isNullOrBlank()) return null
+            val name = saved.substringBefore(':')
+            val sort = entries.firstOrNull { it.name == name } ?: return null
+            return sort to (saved.substringAfter(':', "").toLongOrNull() ?: 1L)
+        }
+
+        fun encode(sort: VodSort): String =
+            if (sort == SHUFFLE) "SHUFFLE:" + (1L + kotlin.random.Random.nextLong(1_999_999_999L)) else sort.name
     }
 }
 
@@ -256,17 +278,19 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
         return count
     }
 
-    /** Removes providers that no longer import On Demand. */
-    fun removeExcept(keepPlaylistIds: Set<String>) {
+    /** Drops every provider not in [keepPlaylistIds]; returns the ones it dropped. */
+    fun removeExcept(keepPlaylistIds: Set<String>): Set<String> {
         val db = writableDatabase
         val existing = HashSet<String>()
         db.rawQuery("SELECT DISTINCT pl FROM items UNION SELECT DISTINCT pl FROM categories", null).use { c ->
             while (c.moveToNext()) existing += c.getString(0)
         }
-        (existing - keepPlaylistIds).forEach { pl ->
+        val dropped = existing - keepPlaylistIds
+        dropped.forEach { pl ->
             db.delete("items", "pl = ?", arrayOf(pl))
             db.delete("categories", "pl = ?", arrayOf(pl))
         }
+        return dropped
     }
 
     // ------------------------------------------------------------------ reading
@@ -345,7 +369,8 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
         offset: Int,
         sort: VodSort = VodSort.DEFAULT,
         genre: String? = null,
-        merge: Boolean = true
+        merge: Boolean = true,
+        seed: Long = 0
     ): List<VodItem> {
         val where = StringBuilder("kind = ?")
         val args = arrayListOf(kind.key)
@@ -364,7 +389,7 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
                 args += parts[1]; args += parts[2]
             }
         }
-        val order = sort.orderBy(if (newestFirst) "added DESC" else "rowid")
+        val order = sort.orderBy(if (newestFirst) "added DESC" else "rowid", seed)
         val group = if (merge) " GROUP BY $DUP_KEY" else ""
         val copies = if (merge) ", COUNT(*) AS copies" else ""
         return query("SELECT *$copies FROM items WHERE $where$group ORDER BY $order LIMIT $limit OFFSET $offset", args)

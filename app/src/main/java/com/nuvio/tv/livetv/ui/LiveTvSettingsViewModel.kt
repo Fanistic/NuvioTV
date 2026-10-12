@@ -75,11 +75,17 @@ class LiveTvSettingsViewModel @Inject constructor(
         if (source.isXtream && source.importVod && !source.liveEnabled) onDemand.refreshNow(source.id)
         else onDemand.refreshSoon()
     }
-    fun removePlaylist(id: String) = viewModelScope.launch { repository.removePlaylist(id) }
+    fun removePlaylist(id: String) = viewModelScope.launch {
+        repository.removePlaylist(id)
+        onDemand.refreshSoon() // its movies and series go too
+    }
     fun setPlaylistLogoSource(id: String, logoSource: String) =
         viewModelScope.launch { repository.setPlaylistLogoSource(id, logoSource) }
-    fun setPlaylistEnabled(id: String, enabled: Boolean) =
-        viewModelScope.launch { repository.setPlaylistEnabled(id, enabled) }
+    fun setPlaylistEnabled(id: String, enabled: Boolean) = viewModelScope.launch {
+        repository.setPlaylistEnabled(id, enabled)
+        // Its movies and series go away with it, and come back (imported again) when re-enabled.
+        onDemand.refreshSoon()
+    }
     fun movePlaylist(id: String, delta: Int) = viewModelScope.launch { repository.movePlaylist(id, delta) }
 
     fun addEpg(name: String, url: String) = viewModelScope.launch { repository.addEpg(name, url) }

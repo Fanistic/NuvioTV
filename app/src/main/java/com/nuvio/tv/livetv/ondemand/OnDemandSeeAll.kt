@@ -4,6 +4,16 @@ package com.nuvio.tv.livetv.ondemand
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -49,7 +60,10 @@ internal fun OnDemandSeeAll(
     onOpen: (metaId: String) -> Unit,
     onFocus: (MetaPreview) -> Unit,
     onLoadMore: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** What the group is sorted by ("A–Z"), shown on the Sort button; null hides the button. */
+    sortLabel: String? = null,
+    onSort: () -> Unit = {}
 ) {
     BackHandler { onBack() }
 
@@ -70,6 +84,22 @@ internal fun OnDemandSeeAll(
             }
     }
 
+    // A new sort: back to the top, on the first poster.
+    var lastSort by remember { mutableStateOf(sortLabel) }
+    var resortPending by remember { mutableStateOf(false) }
+    LaunchedEffect(sortLabel) {
+        if (sortLabel == lastSort) return@LaunchedEffect
+        lastSort = sortLabel
+        resortPending = true
+    }
+    LaunchedEffect(resortPending, items.firstOrNull()?.id) {
+        if (!resortPending || items.isEmpty()) return@LaunchedEffect
+        runCatching { gridState.scrollToItem(0) }
+        repeat(2) { withFrameNanos { } }
+        runCatching { firstFocus.requestFocus() }
+        resortPending = false
+    }
+
     // Start on the first poster.
     LaunchedEffect(items.isNotEmpty()) {
         if (items.isEmpty() || focusedOnce) return@LaunchedEffect
@@ -83,12 +113,21 @@ internal fun OnDemandSeeAll(
             .background(NuvioTheme.colors.Background)
             .padding(vertical = NuvioTheme.spacing.xl)
     ) {
-        Text(
-            text = row?.catalogName ?: "On Demand",
-            style = MaterialTheme.typography.headlineLarge,
-            color = NuvioTheme.colors.TextPrimary,
-            modifier = Modifier.padding(horizontal = NuvioTheme.spacing.xxxl)
-        )
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier.padding(horizontal = NuvioTheme.spacing.xxxl),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = row?.catalogName ?: "On Demand",
+                style = MaterialTheme.typography.headlineLarge,
+                color = NuvioTheme.colors.TextPrimary
+            )
+            // Sort: Up from the first row of posters reaches it.
+            if (sortLabel != null) {
+                Spacer(Modifier.width(NuvioTheme.spacing.lg))
+                SortButton(sortLabel, onSort)
+            }
+        }
         Spacer(Modifier.height(NuvioTheme.spacing.xl))
 
         if (items.isEmpty()) {
@@ -127,5 +166,35 @@ internal fun OnDemandSeeAll(
                 }
             }
         }
+    }
+}
+
+/** "Sort: A–Z" next to the group's name in See all. */
+@Composable
+private fun SortButton(label: String, onClick: () -> Unit) {
+    val colors = NuvioTheme.colors
+    var focused by remember { mutableStateOf(false) }
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp)
+    androidx.compose.foundation.layout.Row(
+        modifier = Modifier
+            .height(40.dp)
+            .clip(shape)
+            .background(if (focused) colors.FocusRing else androidx.compose.ui.graphics.Color.White.copy(alpha = 0.08f))
+            .border(1.dp, androidx.compose.ui.graphics.Color.White.copy(alpha = if (focused) 0f else 0.18f), shape)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        androidx.tv.material3.Icon(
+            Icons.AutoMirrored.Filled.Sort, contentDescription = null,
+            tint = if (focused) colors.Background else colors.TextPrimary,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        com.nuvio.tv.livetv.ui.LiveText(
+            "Sort: $label", size = 14.sp, weight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+            color = if (focused) colors.Background else colors.TextPrimary
+        )
     }
 }

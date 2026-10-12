@@ -97,6 +97,45 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
         }
     }
 
+    /**
+     * Replaces just these channels' listings (Assign EPG: unassigned or given another guide
+     * channel), drops their automatic matches, and stores the new fingerprint, in one go.
+     */
+    fun replaceChannels(fingerprint: String, channels: Set<String>, programs: Map<String, List<EpgProgram>>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            channels.forEach { ch ->
+                db.delete("programs", "ch = ?", arrayOf(ch))
+                db.delete("auto", "ch = ?", arrayOf(ch))
+            }
+            val stmt = db.compileStatement(
+                "INSERT INTO programs (ch, start, stop, title, descr, cat, ep, icon, year, people) VALUES (?,?,?,?,?,?,?,?,?,?)"
+            )
+            programs.forEach { (ch, list) ->
+                list.forEach { p ->
+                    stmt.clearBindings()
+                    stmt.bindString(1, ch)
+                    stmt.bindLong(2, p.startMs)
+                    stmt.bindLong(3, p.stopMs)
+                    stmt.bindString(4, p.title)
+                    p.description?.let { stmt.bindString(5, it) } ?: stmt.bindNull(5)
+                    p.category?.let { stmt.bindString(6, it) } ?: stmt.bindNull(6)
+                    p.episode?.let { stmt.bindString(7, it) } ?: stmt.bindNull(7)
+                    p.icon?.let { stmt.bindString(8, it) } ?: stmt.bindNull(8)
+                    p.year?.let { stmt.bindLong(9, it.toLong()) } ?: stmt.bindNull(9)
+                    if (p.people.isEmpty()) stmt.bindNull(10) else stmt.bindString(10, p.people.joinToString("\u001F"))
+                    stmt.executeInsert()
+                }
+            }
+            db.insertWithOnConflict("meta", null, ContentValues().apply { put("k", "fingerprint"); put("v", fingerprint) },
+                SQLiteDatabase.CONFLICT_REPLACE)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     fun fingerprint(): String? =
         readableDatabase.rawQuery("SELECT v FROM meta WHERE k = 'fingerprint'", null).use { c ->
             if (c.moveToFirst()) c.getString(0) else null

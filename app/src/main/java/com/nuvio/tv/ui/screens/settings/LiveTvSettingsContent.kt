@@ -491,6 +491,25 @@ fun LiveTvSettingsContent(
                         { update { it.copy(onDemandInStreams = !it.onDemandInStreams) } }
                     )
                     SubHeading("Browsing")
+                    var pickingSort by remember { mutableStateOf(false) }
+                    val defaultSort = com.nuvio.tv.livetv.ondemand.VodSort.parse(s.vodDefaultSort)?.first
+                        ?: com.nuvio.tv.livetv.ondemand.VodSort.DEFAULT
+                    SettingsActionRow(
+                        title = "Default Sort Order",
+                        subtitle = "How each group is sorted, unless you pick a sort for it in See all or Manage VOD Groups",
+                        value = defaultSort.label,
+                        onClick = { pickingSort = true }
+                    )
+                    if (pickingSort) com.nuvio.tv.livetv.ondemand.VodSortPicker(
+                        title = "Default Sort Order",
+                        current = defaultSort,
+                        onPick = { picked ->
+                            pickingSort = false
+                            val p = picked ?: com.nuvio.tv.livetv.ondemand.VodSort.DEFAULT
+                            update { it.copy(vodDefaultSort = com.nuvio.tv.livetv.ondemand.VodSort.encode(p)) }
+                        },
+                        onDismiss = { pickingSort = false }
+                    )
                     SettingsToggleRow(
                         "Merge Duplicates",
                         "Shows each movie or series once, even when your provider lists several copies (other qualities, categories or providers). Play lets you pick the version.",
@@ -582,6 +601,12 @@ fun LiveTvSettingsContent(
                         "Each show's start and end time under its title (rows get a little taller)",
                         s.showProgramTimes,
                         { update { it.copy(showProgramTimes = !it.showProgramTimes) } }
+                    )
+                    SettingsToggleRow(
+                        "Striped Bars When There's No Guide",
+                        "Channels with no show listings get striped bars. Turn off to show the channel name in a plain bar instead.",
+                        s.stripeMissingGuide,
+                        { update { it.copy(stripeMissingGuide = !it.stripeMissingGuide) } }
                     )
                     SettingsToggleRow(
                         "Show the \"Now\" Line",

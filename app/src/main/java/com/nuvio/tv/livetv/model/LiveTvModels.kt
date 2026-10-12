@@ -176,6 +176,8 @@ data class LiveTvSettings(
     val compactRows: Boolean = false,
     /** Each show's start and end time under its title in the guide (taller rows). */
     val showProgramTimes: Boolean = false,
+    /** Diagonal stripes on channels (and stretches of time) the guide has nothing for. Off: plain, like a show. */
+    val stripeMissingGuide: Boolean = true,
     val epgOffsetMinutes: Int = 0,
     val reverseZap: Boolean = false,
     val zapMode: ZapMode = ZapMode.GROUP,
@@ -245,6 +247,8 @@ data class LiveTvSettings(
     val showPosters: Boolean = true,
     /** On Demand: show each title once, even when the provider lists several copies. */
     val vodMergeDuplicates: Boolean = true,
+    /** On Demand: how categories are sorted unless you picked one for that category (VodSort name). */
+    val vodDefaultSort: String = "DEFAULT",
     // ---- Live TV row on Nuvio's home screen
     /** Show the Live TV row on the home screen at all. */
     val homeRowEnabled: Boolean = true,
@@ -309,7 +313,9 @@ data class LiveUserState(
     val vodHiddenCategories: Set<String> = emptySet(),
     /** On Demand page: your order of the provider's groups (category uids), and your names for them. */
     val vodGroupOrder: List<String> = emptyList(),
-    val vodGroupNames: Map<String, String> = emptyMap()
+    val vodGroupNames: Map<String, String> = emptyMap(),
+    /** On Demand: the sort you picked for a category (category uid -> VodSort name). */
+    val vodSorts: Map<String, String> = emptyMap()
 )
 
 /** "Remind me" on an upcoming show. */

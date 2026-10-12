@@ -72,7 +72,9 @@ class LiveTv247Matcher @Inject constructor(
                 if (w.size >= 2) add(w.drop(1).joinToString(" "))
                 if (w.size >= 3) add(w.drop(2).joinToString(" "))
             }
-        }.distinctBy { norm(it) }.filter { norm(it).length >= 2 }
+        }.distinctBy { norm(it) }
+            // Dropping words can leave just a genre ("Pixar Animation" -> "Animation"): skip those.
+            .filter { norm(it).length >= 2 && !LiveTvPosterResolver.isGenericName(it) }
         var found: Match? = null
         for (name in tries) {
             val (m, ok) = search(name, lean)
