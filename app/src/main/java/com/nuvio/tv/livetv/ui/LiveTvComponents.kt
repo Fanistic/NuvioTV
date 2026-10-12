@@ -295,9 +295,14 @@ private val NEW_MARK = Regex("""^\s*new\s*[:\-–|]\s*|\s*[(\[]\s*new\s*[)\]]\s*
 
 internal fun titleMarks(title: String): TitleMarks {
     var t = title
-    val live = LIVE_MARK.containsMatchIn(t)
+    // Small raised "ᴸᴵⱽᴱ" / "ᴺᴱᵂ" in the title: the same LIVE / NEW tags as "LIVE:" / "(NEW)".
+    val small = LiveTvSearchBridge.smallWords(t)
+    val smallLive = "live" in small
+    val smallNew = "new" in small
+    if (smallLive || smallNew) t = LiveTvSearchBridge.withoutSmallWords(t, setOf("live", "new"))
+    val live = LIVE_MARK.containsMatchIn(t) || smallLive
     if (live) t = t.replace(LIVE_MARK, "")
-    val isNew = NEW_MARK.containsMatchIn(t)
+    val isNew = NEW_MARK.containsMatchIn(t) || smallNew
     if (isNew) t = t.replace(NEW_MARK, " ").trim()
     return TitleMarks(t.ifBlank { title }, live, isNew)
 }

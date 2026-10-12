@@ -707,7 +707,7 @@ class LiveTvPosterResolver @Inject constructor(
 
         /** "US: 24/7 South Park HD" -> "South Park" (what a 24/7 channel plays). */
         fun showNameOf(raw: String): String =
-            raw.replace(TWENTY_FOUR_SEVEN, " ")
+            com.nuvio.tv.livetv.ui.LiveTvSearchBridge.withoutSmallMarks(raw).replace(TWENTY_FOUR_SEVEN, " ")
                 .replace(SHOW_PREFIX, " ")
                 .replace(SHOW_NOISE, " ")
                 .replace(SHOW_PUNCT, " ")

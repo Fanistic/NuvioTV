@@ -66,6 +66,7 @@ class LiveTvPreferences @Inject constructor(
         val showRecentGroup = booleanPreferencesKey("show_recent_group")
         val compactRows = booleanPreferencesKey("compact_rows")
         val showProgramTimes = booleanPreferencesKey("show_program_times")
+        val guideSize = stringPreferencesKey("guide_size")
         val stripeMissingGuide = booleanPreferencesKey("stripe_missing_guide")
         val epgOffset = intPreferencesKey("epg_offset_minutes")
         val reverseZap = booleanPreferencesKey("reverse_zap")
@@ -110,6 +111,8 @@ class LiveTvPreferences @Inject constructor(
         val showPosters = booleanPreferencesKey("show_posters")
         val vodMergeDuplicates = booleanPreferencesKey("vod_merge_duplicates")
         val vodDefaultSort = stringPreferencesKey("vod_default_sort")
+        val recordingStorage = stringPreferencesKey("recording_storage")
+        val recordingSpaceRule = stringPreferencesKey("recording_space_rule")
         val vodSorts = stringPreferencesKey("vod_sorts")
         val homeRowEnabled = booleanPreferencesKey("home_row_enabled")
         val homeRowHiddenProfiles = stringSetPreferencesKey("home_row_hidden_profiles")
@@ -126,6 +129,7 @@ class LiveTvPreferences @Inject constructor(
         val groupSort = stringPreferencesKey("group_sort")
         val timeshiftEnabled = booleanPreferencesKey("timeshift_enabled")
         val timeshiftMinutes = intPreferencesKey("timeshift_minutes")
+        val rewindAlways = booleanPreferencesKey("rewind_always")
         val captionsByDefault = booleanPreferencesKey("captions_by_default")
         val lockedGroups = stringSetPreferencesKey("locked_groups")
         val reminders = stringPreferencesKey("reminders")
@@ -240,6 +244,7 @@ class LiveTvPreferences @Inject constructor(
             showRecentGroup = p[Keys.showRecentGroup] ?: d.showRecentGroup,
             compactRows = p[Keys.compactRows] ?: d.compactRows,
             showProgramTimes = p[Keys.showProgramTimes] ?: d.showProgramTimes,
+            guideSize = p[Keys.guideSize] ?: d.guideSize,
             stripeMissingGuide = p[Keys.stripeMissingGuide] ?: d.stripeMissingGuide,
             epgOffsetMinutes = p[Keys.epgOffset] ?: d.epgOffsetMinutes,
             reverseZap = p[Keys.reverseZap] ?: d.reverseZap,
@@ -284,6 +289,8 @@ class LiveTvPreferences @Inject constructor(
             showPosters = p[Keys.showPosters] ?: d.showPosters,
             vodMergeDuplicates = p[Keys.vodMergeDuplicates] ?: d.vodMergeDuplicates,
             vodDefaultSort = p[Keys.vodDefaultSort] ?: d.vodDefaultSort,
+            recordingStorage = p[Keys.recordingStorage] ?: d.recordingStorage,
+            recordingSpaceRule = p[Keys.recordingSpaceRule] ?: d.recordingSpaceRule,
             // The row used to be on/off for the whole app. Turned off before (with no per-profile
             // choice saved yet): that was done from the main profile, so it stays off there only.
             homeRowEnabled = true,
@@ -302,6 +309,7 @@ class LiveTvPreferences @Inject constructor(
             groupSort = p[Keys.groupSort] ?: d.groupSort,
             timeshiftEnabled = p[Keys.timeshiftEnabled] ?: d.timeshiftEnabled,
             timeshiftMinutes = p[Keys.timeshiftMinutes] ?: d.timeshiftMinutes,
+            rewindAlways = p[Keys.rewindAlways] ?: d.rewindAlways,
             captionsByDefault = p[Keys.captionsByDefault] ?: d.captionsByDefault
         )
     }.distinctUntilChanged()
@@ -369,6 +377,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.showRecentGroup] = s.showRecentGroup
         p[Keys.compactRows] = s.compactRows
         p[Keys.showProgramTimes] = s.showProgramTimes
+        p[Keys.guideSize] = s.guideSize
         p[Keys.stripeMissingGuide] = s.stripeMissingGuide
         p[Keys.epgOffset] = s.epgOffsetMinutes
         p[Keys.reverseZap] = s.reverseZap
@@ -413,6 +422,8 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.showPosters] = s.showPosters
         p[Keys.vodMergeDuplicates] = s.vodMergeDuplicates
         p[Keys.vodDefaultSort] = s.vodDefaultSort
+        p[Keys.recordingStorage] = s.recordingStorage
+        p[Keys.recordingSpaceRule] = s.recordingSpaceRule
         p[Keys.homeRowEnabled] = s.homeRowEnabled
         p[Keys.homeRowHiddenProfiles] = s.homeRowHiddenProfiles.map { it.toString() }.toSet()
         p[Keys.homeRowAboveContinueWatching] = s.homeRowAboveContinueWatching
@@ -428,6 +439,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.groupSort] = s.groupSort
         p[Keys.timeshiftEnabled] = s.timeshiftEnabled
         p[Keys.timeshiftMinutes] = s.timeshiftMinutes
+        p[Keys.rewindAlways] = s.rewindAlways
         p[Keys.captionsByDefault] = s.captionsByDefault
     }
 
@@ -955,7 +967,7 @@ class LiveTvPreferences @Inject constructor(
     private companion object {
         const val EPG_SEP = "\u0001"
         /** Per-TV keys that Google Drive sync never copies. */
-        private val SYNC_EXCLUDED_BASE = setOf("last_channel", "previous_channel", "last_group", "recent", "on_demand_imports", "channel_quality", "developer_tools")
+        private val SYNC_EXCLUDED_BASE = setOf("last_channel", "previous_channel", "last_group", "recent", "on_demand_imports", "channel_quality", "developer_tools", "recording_storage")
         private val PROFILE_SUFFIX = Regex("""_p\d+$""")
         /** Also matches each profile's own copy ("recent_p2"). */
         val SYNC_EXCLUDED = object : AbstractSet<String>() {

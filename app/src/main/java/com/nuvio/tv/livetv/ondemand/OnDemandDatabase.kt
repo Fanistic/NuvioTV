@@ -392,7 +392,11 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
         val order = sort.orderBy(if (newestFirst) "added DESC" else "rowid", seed)
         val group = if (merge) " GROUP BY $DUP_KEY" else ""
         val copies = if (merge) ", COUNT(*) AS copies" else ""
-        return query("SELECT *$copies FROM items WHERE $where$group ORDER BY $order LIMIT $limit OFFSET $offset", args)
+        // A fixed last tie-break: titles that sort the same (same year, same date added) must
+        // come back in the same order on every page, or a title shows on two pages and another
+        // on none (that's how sorting seemed to undo "Merge Duplicates").
+        val tieBreak = if (merge) "MIN(rowid)" else "rowid"
+        return query("SELECT *$copies FROM items WHERE $where$group ORDER BY $order, $tieBreak LIMIT $limit OFFSET $offset", args)
     }
 
     fun search(kind: VodKind, text: String, excludeCategories: Set<String>, limit: Int = 300, sort: VodSort = VodSort.DEFAULT, merge: Boolean = true): List<VodItem> {

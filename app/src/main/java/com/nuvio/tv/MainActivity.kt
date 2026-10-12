@@ -51,6 +51,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
@@ -278,6 +279,12 @@ open class MainActivity : ComponentActivity() {
     lateinit var onDemandRepository: com.nuvio.tv.livetv.ondemand.OnDemandRepository
 
     @Inject
+    lateinit var liveTvRecorder: com.nuvio.tv.livetv.record.LiveTvRecorder
+
+    @Inject
+    lateinit var liveTvRecordingScheduler: com.nuvio.tv.livetv.record.LiveTvRecordingScheduler
+
+    @Inject
     lateinit var layoutPreferenceDataStore: LayoutPreferenceDataStore
 
     @Inject
@@ -372,6 +379,8 @@ open class MainActivity : ComponentActivity() {
         // Live TV fork: start reading the saved channel list and guide as the app opens (before
         // any screen, even the profile picker), so Live TV is ready when you get to it.
         lifecycleScope.launch { runCatching { com.nuvio.tv.livetv.startup.LiveTvPreload.start(this@MainActivity) } }
+        // Live TV fork: scheduled recordings (sets their alarms; series look for new airings).
+        runCatching { liveTvRecordingScheduler.start() }
         isFirstResumeAfterCreate = true
         window?.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
 
@@ -1050,6 +1059,10 @@ open class MainActivity : ComponentActivity() {
                     val onDemandHasContent = remember { onDemandRepository.also { it.start() }.hasContent }
                         .collectAsState().value
                     val onDemandInSidebar = onDemandHasContent && liveTvSettingsNow.onDemandInSidebar
+                    // Live TV fork: Recordings has its own menu entry once there's anything recorded.
+                    val recordingsInSidebar = liveTvRecorder.recordings.collectAsState().value.isNotEmpty() ||
+                        liveTvRecordingScheduler.schedules.collectAsState().value.isNotEmpty() ||
+                        liveTvRecordingScheduler.series.collectAsState().value.isNotEmpty()
                     val rootRoutes = remember(discoverLocation, liveTvInSidebar, onDemandInSidebar) {
                         buildSet {
                             add(Screen.Home.route)
@@ -1058,6 +1071,7 @@ open class MainActivity : ComponentActivity() {
                             // first, like every other page), even while its catalog is being
                             // checked or updated; only its menu entry depends on having content.
                             add(Screen.OnDemand.route)
+                            add(Screen.Recordings.route)
                             add(Screen.Search.route)
                             add(Screen.Library.route)
                             add(Screen.Settings.route)
@@ -1080,7 +1094,8 @@ open class MainActivity : ComponentActivity() {
                         strNavSettings,
                         discoverLocation,
                         liveTvInSidebar,
-                        onDemandInSidebar
+                        onDemandInSidebar,
+                        recordingsInSidebar
                     ) {
                         buildList {
                             add(
@@ -1114,6 +1129,15 @@ open class MainActivity : ComponentActivity() {
                                         route = Screen.OnDemand.route,
                                         label = "On Demand",
                                         icon = Icons.Default.VideoLibrary
+                                    )
+                                )
+                            }
+                            if (recordingsInSidebar) {
+                                add(
+                                    DrawerItem(
+                                        route = Screen.Recordings.route,
+                                        label = "Recordings",
+                                        icon = Icons.Default.FiberManualRecord
                                     )
                                 )
                             }

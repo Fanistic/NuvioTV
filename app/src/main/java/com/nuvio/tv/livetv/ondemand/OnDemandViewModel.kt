@@ -352,15 +352,17 @@ class OnDemandViewModel @Inject constructor(
                     !ParentalControls.isLocked("vod:${c.uid}", c.name, settings.value, user.lockedGroups)
             }
             homeGroups = visible.map { it to (user.vodGroupNames[it.uid]?.takeIf { n -> n.isNotBlank() } ?: it.name) }
-            homeItems.clear(); homeEnded.clear()
+            homeItems.clear(); homeEnded.clear(); homeRead.clear()
             homeSorts = user.vodSorts
             // The first page of every group (each a quick read from the device's catalog).
             for ((c, _) in homeGroups) {
                 val (sort, seed) = sortOf(c.uid)
-                val page = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, 0, sort, merge = settings.value.vodMergeDuplicates, seed = seed)
+                val raw = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, 0, sort, merge = settings.value.vodMergeDuplicates, seed = seed)
+                val page = dedupe(emptyList(), raw)
                 primePosters(page)
                 homeItems[c.uid] = page
-                if (page.size < HOME_PAGE) homeEnded += c.uid
+                homeRead[c.uid] = raw.size
+                if (raw.size < HOME_PAGE) homeEnded += c.uid
             }
             _home.value = VodHomeState(rows = buildHomeRows(), groups = entries, loading = false)
             enrichHome()
@@ -377,8 +379,13 @@ class OnDemandViewModel @Inject constructor(
           try {
             val have = homeItems[uid].orEmpty()
             val (sort, seed) = sortOf(uid)
-            val more = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, have.size, sort, merge = settings.value.vodMergeDuplicates, seed = seed)
-            if (more.size < HOME_PAGE) homeEnded += uid
+            // Read on from where the catalog left off (not from how many are shown: titles
+            // dropped as duplicates would otherwise be read again, page after page).
+            val offset = homeRead[uid] ?: have.size
+            val raw = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, offset, sort, merge = settings.value.vodMergeDuplicates, seed = seed)
+            if (raw.size < HOME_PAGE) homeEnded += uid
+            homeRead[uid] = offset + raw.size
+            val more = dedupe(have, raw)
             primePosters(more)
             homeItems[uid] = have + more
             updateHomeRows()
@@ -388,11 +395,43 @@ class OnDemandViewModel @Inject constructor(
     }
 
     private val homeLoadingMore = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    /** How many catalog rows each group has read so far (its next page starts there). */
+    private val homeRead = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     // ------------------------------------------------------------------ sorting
 
     /** The sort picked for each group (saved), as last loaded. */
     @Volatile private var homeSorts: Map<String, String> = emptyMap()
+
+    /**
+     * "Merge Duplicates": [more] without titles already in [have] (or earlier in [more]). The
+     * catalog merges by TMDB id, or by name and year when there's none, so a copy with a TMDB id
+     * and one without stayed apart; sorting A–Z put them side by side. Same name and year, or
+     * same TMDB id, counts as the same title here. Play still offers every copy.
+     */
+    private fun dedupe(have: List<VodItem>, more: List<VodItem>): List<VodItem> {
+        if (!settings.value.vodMergeDuplicates) return more
+        val tmdbSeen = HashSet<String>()
+        // Name -> the years seen with it (0 = no year). A copy without a year matches any year,
+        // so "Movie" and "Movie (2019)" are one title.
+        val namesSeen = HashMap<String, MutableSet<Int>>()
+        fun isDup(i: VodItem): Boolean {
+            val t = i.tmdbId?.takeIf { it.isNotBlank() }
+            if (t != null && t in tmdbSeen) return true
+            val n = OnDemandDatabase.normalize(i.name)
+            if (n.isEmpty()) return false
+            val years = namesSeen[n] ?: return false
+            val y = i.year ?: 0
+            return y == 0 || 0 in years || y in years
+        }
+        fun note(i: VodItem) {
+            i.tmdbId?.takeIf { it.isNotBlank() }?.let { tmdbSeen += it }
+            val n = OnDemandDatabase.normalize(i.name)
+            if (n.isNotEmpty()) namesSeen.getOrPut(n) { HashSet() } += (i.year ?: 0)
+        }
+        have.forEach { note(it) }
+        return more.filter { i -> if (isDup(i)) false else { note(i); true } }
+    }
 
     /** A group's sort: the one picked for it, else Default Sort Order from Settings. */
     private fun sortOf(uid: String): Pair<VodSort, Long> =
@@ -416,10 +455,12 @@ class OnDemandViewModel @Inject constructor(
             prefs.setVodSort(uid, saved)
             val (c, _) = homeGroups.firstOrNull { it.first.uid == uid } ?: return@launch
             val (s, seed) = sortOf(uid)
-            val page = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, 0, s, merge = settings.value.vodMergeDuplicates, seed = seed)
+            val raw = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, 0, s, merge = settings.value.vodMergeDuplicates, seed = seed)
+            val page = dedupe(emptyList(), raw)
             primePosters(page)
             homeItems[uid] = page
-            if (page.size < HOME_PAGE) homeEnded += uid else homeEnded -= uid
+            homeRead[uid] = raw.size
+            if (raw.size < HOME_PAGE) homeEnded += uid else homeEnded -= uid
             updateHomeRows()
             enrichHome()
         }

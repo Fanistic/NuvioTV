@@ -699,6 +699,11 @@ internal fun PlayerRuntimeController.cancelNextEpisodeAutoPlayOnFatalError() {
 }
 
 internal fun PlayerRuntimeController.saveWatchProgressInternal(position: Long, duration: Long, syncRemote: Boolean = true) {
+    // Live TV fork: a recording keeps its own place (kept out of Continue Watching and history).
+    if (com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType)) {
+        if (position >= 1000) com.nuvio.tv.livetv.record.RecordingResume.save(context, contentId, position, duration)
+        return
+    }
     if (contentType.equals("cloud", ignoreCase = true)) {
         saveCloudLibraryProgress(position, duration, completed = false)
         return
@@ -796,6 +801,8 @@ internal fun PlayerRuntimeController.refreshScrobbleItem() {
 }
 
 internal fun PlayerRuntimeController.buildScrobbleItem(): TrackingMediaReference? {
+    // Live TV fork: recordings are never sent to Trakt or other trackers.
+    if (com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType)) return null
     val rawContentId = contentId ?: return null
     val reference = buildTrackingMediaReference(
         contentType = contentType ?: "movie",

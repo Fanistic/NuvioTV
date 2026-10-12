@@ -828,6 +828,14 @@ class LiveTvRepository @Inject constructor(
     }
 
     /** One channel's whole schedule (overlay mode's days, catch-up following into later shows). */
+    /** A channel's listings from an hour ago to [days] ahead (series recordings look through these). */
+    suspend fun upcomingListings(channelKey: String, days: Int): List<EpgProgram> = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        if (!guideInDb) return@withContext _programs.value[channelKey].orEmpty()
+        runCatching { guideDb.channelRange(channelKey, now - HOUR, now + days * 24 * HOUR) }
+            .getOrNull()?.takeIf { it.isNotEmpty() } ?: _programs.value[channelKey].orEmpty()
+    }
+
     fun ensureChannelSchedule(channelKey: String) {
         if (!guideInDb) return
         scope.launch {

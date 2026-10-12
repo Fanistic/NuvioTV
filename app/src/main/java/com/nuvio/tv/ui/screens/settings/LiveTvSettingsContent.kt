@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.PlayCircleFilled
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.automirrored.filled.Help
@@ -57,6 +58,7 @@ import com.nuvio.tv.livetv.model.ZapMode
 import com.nuvio.tv.livetv.ui.LiveTvSettingsViewModel
 import com.nuvio.tv.livetv.ui.TextInputDialog
 import com.nuvio.tv.ui.components.NuvioDialog
+import com.nuvio.tv.livetv.model.effectiveGuideSize
 import com.nuvio.tv.ui.screens.collection.NuvioTextField
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
@@ -590,11 +592,29 @@ fun LiveTvSettingsContent(
                         s.showChannelLogos,
                         { update { it.copy(showChannelLogos = !it.showChannelLogos) } }
                     )
-                    SettingsToggleRow(
-                        "Compact Rows",
-                        "Slimmer channel rows, so about two more channels fit",
-                        s.compactRows,
-                        { update { it.copy(compactRows = !it.compactRows) } }
+                    var pickingGuideSize by remember { mutableStateOf(false) }
+                    val guideSizes = listOf(
+                        Triple("COMPACT", "Compact", "Slimmer rows, slightly smaller text: about two more channels fit"),
+                        Triple("STANDARD", "Standard", "The usual size"),
+                        Triple("LARGE", "Large", "Bigger text and rows: about three fewer channels fit"),
+                        Triple("XLARGE", "Extra Large", "The biggest text and rows: about five fewer channels fit, and 1½ hours across")
+                    )
+                    val currentSize = s.effectiveGuideSize
+                    SettingsActionRow(
+                        title = "Guide Size",
+                        subtitle = "How big the text and rows in the guide are",
+                        value = guideSizes.firstOrNull { it.first == currentSize }?.second ?: "Standard",
+                        onClick = { pickingGuideSize = true }
+                    )
+                    if (pickingGuideSize) ActionListDialog(
+                        title = "Guide Size",
+                        actions = guideSizes.map { (key, label, _) ->
+                            (if (key == currentSize) "$label  ✓" else label) to {
+                                pickingGuideSize = false
+                                update { it.copy(guideSize = key, compactRows = key == "COMPACT") }
+                            }
+                        },
+                        onDismiss = { pickingGuideSize = false }
                     )
                     SettingsToggleRow(
                         "Show Times in the Guide",
@@ -727,14 +747,28 @@ fun LiveTvSettingsContent(
                         s.timeshiftEnabled,
                         { update { it.copy(timeshiftEnabled = !it.timeshiftEnabled) } }
                     )
-                    if (s.timeshiftEnabled) SettingsActionRow(
-                        title = "Keep Up To",
-                        subtitle = "How much can be recorded while paused (uses this device's storage, deleted afterwards)",
-                        value = "${s.timeshiftMinutes} min · about " + (s.timeshiftMinutes * 35).let { mb -> if (mb >= 1000) String.format(java.util.Locale.US, "%.1f GB", mb / 1024f) else "$mb MB" },
-                        onClick = {
-                            update { st -> st.copy(timeshiftMinutes = when (st.timeshiftMinutes) { 10 -> 30; 30 -> 60; else -> 10 }) }
-                        }
+                    if (s.timeshiftEnabled) SettingsToggleRow(
+                        "Rewind Anytime",
+                        "Full-screen channels keep a rolling recording, so you can skip back without pausing first (Left / Right once you're behind live, or from the panel). Channels take a second longer to start.",
+                        s.rewindAlways,
+                        { update { it.copy(rewindAlways = !it.rewindAlways) } }
                     )
+                    if (s.timeshiftEnabled) {
+                        // Longer buffers when recordings go to a USB drive (far more room).
+                        val onDrive = s.recordingStorage.isNotEmpty()
+                        val lengths = if (onDrive) listOf(15, 30, 60, 120, 240) else listOf(15, 30, 60, 120)
+                        SettingsActionRow(
+                            title = "Keep Up To",
+                            subtitle = "How far back you can go. Saved to the drive set in Recordings, and deleted when you change channel or leave Live TV.",
+                            value = "${s.timeshiftMinutes} min · about " + (s.timeshiftMinutes * 35).let { mb -> if (mb >= 1000) String.format(java.util.Locale.US, "%.1f GB", mb / 1024f) else "$mb MB" },
+                            onClick = {
+                                update { st ->
+                                    val i = lengths.indexOf(st.timeshiftMinutes)
+                                    st.copy(timeshiftMinutes = lengths[if (i < 0) 1 else (i + 1) % lengths.size])
+                                }
+                            }
+                        )
+                    }
                     SettingsToggleRow(
                         "Prefer HLS for Catch-Up",
                         "Asks Xtream providers for replays in HLS (m3u8) first, so the seek bar works. Falls back to TS if the provider doesn't offer it.",
@@ -956,6 +990,57 @@ fun LiveTvSettingsContent(
                         "Set from a show's info in the guide. You get a message a minute before it starts.",
                         "${user.reminders.size}",
                         onClick = { dialog = LiveDialog.Reminders }
+                    )
+                }
+            }
+
+            // ------------------------------------------------------------ Recordings
+            item(key = "recordings") {
+                val recContext = androidx.compose.ui.platform.LocalContext.current
+                // Drives come and go: read again whenever the section is opened.
+                val drives = remember("recordings" in open) { com.nuvio.tv.livetv.record.RecordingStorage.choices(recContext) }
+                val chosen = drives.firstOrNull { it.id == s.recordingStorage }
+                fun driveLabel(c: com.nuvio.tv.livetv.record.RecordingStorage.Choice) =
+                    c.label + " · " + com.nuvio.tv.livetv.record.RecordingStorage.sizeLabel(c.freeBytes) + " free"
+                var pickingDrive by remember { mutableStateOf(false) }
+                LiveSection(
+                    title = "Recordings",
+                    summary = "Saved to " + (chosen?.label ?: if (s.recordingStorage.isEmpty()) "This Device" else "a drive that isn't plugged in"),
+                    icon = Icons.Default.FiberManualRecord,
+                    open = "recordings" in open,
+                    onToggle = { toggle("recordings") }
+                ) {
+                    SettingsActionRow(
+                        title = "Save Recordings To",
+                        subtitle = if (chosen == null && s.recordingStorage.isNotEmpty())
+                            "The chosen drive isn't plugged in: recordings go to this device until it's back"
+                        else "Where new recordings go. Ones already recorded stay where they are.",
+                        value = chosen?.label ?: "This Device",
+                        onClick = { pickingDrive = true }
+                    )
+                    SettingsActionRow(
+                        title = "When Storage Runs Low",
+                        subtitle = if (s.recordingSpaceRule == "DELETE_OLDEST") "The oldest recordings on that drive are deleted to make room"
+                        else "Recording stops (nothing is deleted)",
+                        value = if (s.recordingSpaceRule == "DELETE_OLDEST") "Delete Oldest" else "Stop Recording",
+                        onClick = {
+                            if (s.recordingSpaceRule == "DELETE_OLDEST") update { it.copy(recordingSpaceRule = "STOP") }
+                            else confirm(
+                                "Delete Old Recordings?",
+                                "When space runs low, the oldest recordings on that drive will be deleted to make room for new ones.",
+                                "Turn On"
+                            ) { update { it.copy(recordingSpaceRule = "DELETE_OLDEST") } }
+                        }
+                    )
+                    if (pickingDrive) ActionListDialog(
+                        title = "Save Recordings To",
+                        actions = drives.map { c ->
+                            (driveLabel(c) + if (c.id == (chosen?.id ?: "")) "  ✓" else "") to {
+                                pickingDrive = false
+                                update { it.copy(recordingStorage = c.id) }
+                            }
+                        },
+                        onDismiss = { pickingDrive = false }
                     )
                 }
             }

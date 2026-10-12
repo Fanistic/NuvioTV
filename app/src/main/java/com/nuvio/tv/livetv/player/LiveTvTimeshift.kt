@@ -24,7 +24,8 @@ import java.net.URL
  * recorded to the device (one connection to the provider, the same one playback used), and
  * play continues from the recording, behind live. "Go live" drops it.
  *
- *  - TS streams: the stream is written to one growing file, played as it grows.
+ *  - TS streams: cut into short pieces with a local playlist as they arrive ([TsSegmenter]),
+ *    so skipping back and forward works the same as on HLS channels.
  *  - HLS (m3u8) streams: each segment is saved as it appears, with a local playlist; older
  *    segments are dropped past the time limit.
  *
@@ -56,8 +57,11 @@ class LiveTvTimeshift(private val context: Context) {
     val isRecording: Boolean get() = recording
 
     /** Enough room on the device for [minutes] of recording (rough: about 35 MB a minute). */
+    /** Where the buffer is kept: the drive set for recordings (this device's cache otherwise). */
+    @Volatile var baseDir: File = File(context.cacheDir, "timeshift")
+
     fun hasRoomFor(minutes: Int): Boolean =
-        runCatching { context.cacheDir.usableSpace > (minutes * 35L + 300L) * 1024 * 1024 }.getOrDefault(false)
+        runCatching { (baseDir.takeIf { it.exists() || it.mkdirs() } ?: context.cacheDir).usableSpace > (minutes * 35L + 300L) * 1024 * 1024 }.getOrDefault(false)
 
     /**
      * Starts recording [url] (with [headers]). Returns the session to play, or null if this
@@ -65,7 +69,8 @@ class LiveTvTimeshift(private val context: Context) {
      */
     fun start(url: String, headers: Map<String, String>, keepMinutes: Int): Session? {
         stop()
-        val dir = File(context.cacheDir, "timeshift/" + System.currentTimeMillis()).apply { mkdirs() }
+        val dir = File(baseDir, System.currentTimeMillis().toString()).apply { mkdirs() }
+            .takeIf { it.exists() } ?: File(context.cacheDir, "timeshift/" + System.currentTimeMillis()).apply { mkdirs() }
         val isHls = url.lowercase().substringBefore('?').endsWith(".m3u8") || url.contains("m3u8", ignoreCase = true)
         val now = System.currentTimeMillis()
         trimmedMs = 0L
@@ -74,9 +79,8 @@ class LiveTvTimeshift(private val context: Context) {
             val local = File(dir, "index.m3u8")
             Session(Kind.HLS, now, Uri.fromFile(local), dir).also { job = scope.launch { recordHls(url, headers, dir, local, keepMinutes) } }
         } else {
-            val file = File(dir, "stream.ts")
-            file.createNewFile()
-            Session(Kind.TS, now, Uri.fromFile(file), dir).also { job = scope.launch { recordTs(url, headers, file, keepMinutes) } }
+            val local = File(dir, "index.m3u8")
+            Session(Kind.TS, now, Uri.fromFile(local), dir).also { job = scope.launch { recordTs(url, headers, dir, keepMinutes) } }
         }
         session = s
         return s
@@ -93,7 +97,7 @@ class LiveTvTimeshift(private val context: Context) {
         // Leftovers from earlier (a crash, the app being closed while paused).
         scope.launch {
             runCatching {
-                File(context.cacheDir, "timeshift").listFiles()?.forEach { f ->
+                (File(context.cacheDir, "timeshift").listFiles().orEmpty() + baseDir.listFiles().orEmpty()).forEach { f ->
                     if (f.lastModified() < System.currentTimeMillis() - 6 * 60 * 60 * 1000L) f.deleteRecursively()
                 }
             }
@@ -114,23 +118,24 @@ class LiveTvTimeshift(private val context: Context) {
 
     // ------------------------------------------------------------------ TS
 
-    private suspend fun recordTs(url: String, headers: Map<String, String>, file: File, keepMinutes: Int) {
-        val until = System.currentTimeMillis() + keepMinutes * 60_000L
+    private suspend fun recordTs(url: String, headers: Map<String, String>, dir: File, keepMinutes: Int) {
+        // Pieces past the time limit are dropped as new ones come in (it records on, behind you).
+        val segmenter = TsSegmenter(dir, keepSec = keepMinutes * 60.0) { _ -> }
         try {
             val c = open(url, headers)
             c.inputStream.use { input ->
-                java.io.FileOutputStream(file, true).use { out ->
-                    val buf = ByteArray(64 * 1024)
-                    while (scope.isActive && recording && System.currentTimeMillis() < until) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        out.write(buf, 0, n)
-                    }
+                val buf = ByteArray(64 * 1024)
+                while (scope.isActive && recording) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    segmenter.write(buf, 0, n)
+                    trimmedMs = (segmenter.trimmedSec * 1000).toLong()
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Recording stopped: ${e.message}")
         } finally {
+            runCatching { segmenter.finish(ended = true) }
             recording = false
         }
     }

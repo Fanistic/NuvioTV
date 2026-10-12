@@ -380,8 +380,34 @@ object LiveTvSearchBridge {
     /** The release year a title ends with ("American Pie: Reunion (2012)" -> 2012), if any. */
     internal fun yearInTitle(raw: String): Int? = trailingYear.find(raw.trim())?.groupValues?.get(1)?.toIntOrNull()
 
+    /**
+     * Small raised letters some providers put in titles and names ("ᴸᴵⱽᴱ", "ᴺᴱᵂ", "ᴴᴰ", "ʟɪᴠᴇ"):
+     * superscript and small-capital letters, as one string of ordinary letters per run.
+     */
+    private const val SMALL = "ᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁⱽᵂᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᶦᶫᶰᶸᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢ⁰¹²³⁴⁵⁶⁷⁸⁹⁺"
+    private const val PLAIN = "abdeghijklmnoprtuvwabcdefghijklmnoprstuvwxyzilnuabcdefghijklmnoprstuvwyz0123456789+"
+    private val smallRun = Regex("[$SMALL]+(?:\\s*[$SMALL]+)*")
+
+    private fun plainOf(run: String): String = buildString {
+        run.forEach { ch -> val i = SMALL.indexOf(ch); if (i >= 0) append(PLAIN[i]) }
+    }
+
+    /** The small raised words in [raw], as plain lower-case words ("ᴸᴵⱽᴱ" -> "live"). */
+    internal fun smallWords(raw: String): List<String> = smallRun.findAll(raw).map { plainOf(it.value) }.toList()
+
+    /** [raw] without the small raised words in [words] ("ᴸᴵⱽᴱ" when [words] has "live"). */
+    internal fun withoutSmallWords(raw: String, words: Set<String>): String =
+        if (raw.none { it in SMALL }) raw
+        else raw.replace(smallRun) { m -> if (plainOf(m.value) in words) " " else m.value }.replace(Regex("\\s+"), " ").trim()
+
+    /** [raw] without its small raised letters ("Monday Night Football ᴸᴵⱽᴱ" -> "Monday Night Football"). */
+    internal fun withoutSmallMarks(raw: String): String =
+        if (raw.none { it in SMALL }) raw else raw.replace(smallRun, " ").replace(Regex("\\s+"), " ").trim()
+
     internal fun cleanTitle(raw: String): String {
-        var t = raw.trim().replace(trailingYear, "").replace(twentyFourSeven, " ")
+        // Small raised "ᴸᴵⱽᴱ" / "ᴺᴱᵂ" / "ᴴᴰ" marks aren't part of the name: searching with them
+        // in found nothing, so those shows got no poster.
+        var t = withoutSmallMarks(raw).trim().replace(trailingYear, "").replace(twentyFourSeven, " ")
         repeat(2) { t = t.replace(leadingTags, "") }
         t = t.replace(bracketed, " ")
             .replace(episodeCode, " ")

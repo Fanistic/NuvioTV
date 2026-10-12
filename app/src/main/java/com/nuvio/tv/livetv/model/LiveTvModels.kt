@@ -176,6 +176,8 @@ data class LiveTvSettings(
     val compactRows: Boolean = false,
     /** Each show's start and end time under its title in the guide (taller rows). */
     val showProgramTimes: Boolean = false,
+    /** Guide Size: COMPACT, STANDARD, LARGE or XLARGE (blank = from the old Slimmer Rows switch). */
+    val guideSize: String = "",
     /** Diagonal stripes on channels (and stretches of time) the guide has nothing for. Off: plain, like a show. */
     val stripeMissingGuide: Boolean = true,
     val epgOffsetMinutes: Int = 0,
@@ -249,6 +251,10 @@ data class LiveTvSettings(
     val vodMergeDuplicates: Boolean = true,
     /** On Demand: how categories are sorted unless you picked one for that category (VodSort name). */
     val vodDefaultSort: String = "DEFAULT",
+    /** Recordings: where new ones are saved ("" = this device, else a storage volume's id). */
+    val recordingStorage: String = "",
+    /** Recordings: when storage runs low, "STOP" (stop recording) or "DELETE_OLDEST". */
+    val recordingSpaceRule: String = "STOP",
     // ---- Live TV row on Nuvio's home screen
     /** Show the Live TV row on the home screen at all. */
     val homeRowEnabled: Boolean = true,
@@ -280,6 +286,8 @@ data class LiveTvSettings(
     val timeshiftEnabled: Boolean = true,
     /** How much to keep, in minutes. */
     val timeshiftMinutes: Int = 30,
+    /** Rewind anytime: a rolling buffer of the channel you watch full screen (not only after pausing). */
+    val rewindAlways: Boolean = false,
     /** Turn closed captions on automatically when a channel has them. */
     val captionsByDefault: Boolean = false
 )
@@ -497,3 +505,7 @@ object LiveTvLoadReport {
         lines.value = (lines.value + "+${t}s  $text").takeLast(80)
     }
 }
+
+/** Guide Size, with the old "Slimmer Rows" switch standing in until a size is picked. */
+val LiveTvSettings.effectiveGuideSize: String
+    get() = guideSize.ifBlank { if (compactRows) "COMPACT" else "STANDARD" }

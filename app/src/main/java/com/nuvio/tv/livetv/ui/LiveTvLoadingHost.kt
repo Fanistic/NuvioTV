@@ -87,7 +87,31 @@ fun LiveTvLoadingHost(navController: NavController) {
         }
     }
     val elapsed = if (elapsedSec >= 20) " · " + "%d:%02d".format(elapsedSec / 60, elapsedSec % 60) else ""
+    // Recording messages (set, started, missed, a clash), for a few seconds, wherever you are.
+    val notice by com.nuvio.tv.livetv.record.LiveTvNotice.current.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(notice) {
+        val n = notice ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(if (n.text.length > 60) 6_000 else 4_000)
+        com.nuvio.tv.livetv.record.LiveTvNotice.clear(n)
+    }
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
+        AnimatedVisibility(
+            visible = notice != null,
+            enter = fadeIn(), exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            LiveText(
+                notice?.text.orEmpty(),
+                modifier = Modifier
+                    .padding(bottom = 64.dp, start = 48.dp, end = 48.dp)
+                    .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(14.dp))
+                    .border(1.dp, NuvioTheme.colors.Border, RoundedCornerShape(14.dp))
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                color = Color.White,
+                size = 15.sp,
+                maxLines = 3
+            )
+        }
         AnimatedVisibility(visible = message != null && !playing, enter = fadeIn(), exit = fadeOut()) {
             Row(
                 modifier = Modifier

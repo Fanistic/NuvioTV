@@ -80,6 +80,9 @@ internal fun ManageVodGroupsPanel(
     var spot by remember { mutableStateOf<PanelSpot>(PanelSpot.Line(0, GroupControl.TOGGLE)) }
     var renaming by remember { mutableStateOf<Int?>(null) }
     var sorting by remember { mutableStateOf<Int?>(null) }
+    // Back with unsaved changes: ask before throwing them away.
+    var confirmLeave by remember { mutableStateOf(false) }
+    fun leave() { if (edited.toList() != groups) confirmLeave = true else onDismiss() }
     val listState = rememberLazyListState()
     val keys = remember { FocusRequester() }
 
@@ -115,7 +118,7 @@ internal fun ManageVodGroupsPanel(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    Dialog(onDismissRequest = { leave() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(modifier = Modifier.fillMaxWidth().fillMaxHeight(), contentAlignment = Alignment.CenterEnd) {
             Column(
                 modifier = Modifier
@@ -129,7 +132,7 @@ internal fun ManageVodGroupsPanel(
                     .focusRequester(keys)
                     .focusable()
                     .onPreviewKeyEvent { e ->
-                        if (renaming != null || sorting != null) return@onPreviewKeyEvent false
+                        if (renaming != null || sorting != null || confirmLeave) return@onPreviewKeyEvent false
                         if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent e.key != Key.Back
                         val s = spot
                         val last = edited.lastIndex
@@ -163,7 +166,7 @@ internal fun ManageVodGroupsPanel(
                                 }; true
                             }
                             Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> { if (e.nativeKeyEvent.repeatCount == 0) press(); true }
-                            Key.Back -> { onDismiss(); true }
+                            Key.Back -> { leave(); true }
                             else -> false
                         }
                     }
@@ -211,6 +214,34 @@ internal fun ManageVodGroupsPanel(
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     PanelButton("Reset to Default", primary = false, focused = spot == PanelSpot.Reset, modifier = Modifier.weight(1f))
                     PanelButton("Done", primary = true, focused = spot == PanelSpot.Done, modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+
+    if (confirmLeave) {
+        val saveFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) {
+            kotlinx.coroutines.delay(80)
+            runCatching { saveFocus.requestFocus() }
+        }
+        com.nuvio.tv.ui.components.NuvioDialog(
+            onDismiss = { confirmLeave = false; runCatching { keys.requestFocus() } },
+            title = "Save your changes?",
+            subtitle = "You changed some of your groups. Save them before you go?",
+            width = 520.dp
+        ) {
+            com.nuvio.tv.ui.screens.settings.SettingsDialogActionRow {
+                com.nuvio.tv.ui.screens.settings.SettingsDialogActionButton(
+                    text = "Don't Save",
+                    onClick = { confirmLeave = false; onDismiss() }
+                )
+                Box(Modifier.focusRequester(saveFocus)) {
+                    com.nuvio.tv.ui.screens.settings.SettingsDialogActionButton(
+                        text = "Save",
+                        onClick = { confirmLeave = false; onDone(edited.toList()) },
+                        primary = true
+                    )
                 }
             }
         }

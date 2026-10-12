@@ -63,8 +63,13 @@ class LiveTvSettingsViewModel @Inject constructor(
         }
 
     fun savePlaylist(source: PlaylistSource) = viewModelScope.launch {
+        val before = playlists.value.firstOrNull { it.id == source.id }
         repository.updatePlaylist(source)
-        onDemand.refreshSoon()
+        // Movies & series just switched on: import this provider now, whenever it was last
+        // imported (switched off earlier, it had its titles removed but still counted as
+        // "imported recently", so nothing came back for up to a day).
+        if (source.isXtream && source.importVod && source.enabled && before?.importVod == false) onDemand.refreshNow(source.id)
+        else onDemand.refreshSoon()
     }
     /**
      * "Update now" on a playlist. A login with TV channels off only has On Demand to update, so
@@ -84,7 +89,8 @@ class LiveTvSettingsViewModel @Inject constructor(
     fun setPlaylistEnabled(id: String, enabled: Boolean) = viewModelScope.launch {
         repository.setPlaylistEnabled(id, enabled)
         // Its movies and series go away with it, and come back (imported again) when re-enabled.
-        onDemand.refreshSoon()
+        val pl = playlists.value.firstOrNull { it.id == id }
+        if (enabled && pl != null && pl.isXtream && pl.importVod) onDemand.refreshNow(id) else onDemand.refreshSoon()
     }
     fun movePlaylist(id: String, delta: Int) = viewModelScope.launch { repository.movePlaylist(id, delta) }
 
