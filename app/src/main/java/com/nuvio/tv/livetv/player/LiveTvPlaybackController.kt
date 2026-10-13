@@ -392,9 +392,6 @@ class LiveTvPlaybackController @Inject constructor(
      * which is far more robust with Alexa Home Theater / Echo speakers on Fire TV. Changing it
      * rebuilds the player (and carries on with the same channel).
      */
-    /** Live TV buffer size ("small", "normal", "large", "xlarge"); changing it rebuilds the player. */
-    var bufferSize: String = "normal"
-
     /**
      * The video's frame rate as measured from the frames themselves (for Match Frame Rate).
      * Many live streams don't state their frame rate, so the player's own value is often
@@ -425,6 +422,9 @@ class LiveTvPlaybackController @Inject constructor(
         frameDeltaCount = 0
         lastFrameUs = Long.MIN_VALUE
     }
+
+    /** Live TV buffer size ("small", "normal", "large", "xlarge"); changing it rebuilds the player. */
+    var bufferSize: String = "normal"
         set(value) {
             if (field == value) return
             field = value
