@@ -1095,6 +1095,14 @@ open class MainActivity : ComponentActivity() {
                         currentRoute == it || currentRoute?.startsWith("$it/") == true
                     }
                     var liveTvGroupOpen by remember { mutableStateOf(false) }
+                    // Whether the side menu is open right now.
+                    var sidebarOpenNow by remember { mutableStateOf(false) }
+                    // Which list the menu will open on is settled while it's closed (on a Live TV
+                    // page: the Live TV list), so opening it never swaps one list for the other
+                    // mid-open. That swap made the menu flicker open and shut several times.
+                    LaunchedEffect(onLiveTvGroupPage) {
+                        if (!sidebarOpenNow) liveTvGroupOpen = onLiveTvGroupPage
+                    }
                     val rootRoutes = remember(discoverLocation, liveTvInSidebar, onDemandInSidebar) {
                         buildSet {
                             add(Screen.Home.route)
@@ -1129,7 +1137,9 @@ open class MainActivity : ComponentActivity() {
                         onDemandInSidebar,
                         recordingsInSidebar,
                         recordingNow,
-                        liveTvGroupOpen
+                        liveTvGroupOpen,
+                        modernSidebarEnabled,
+                        sidebarOpenNow
                     ) {
                         buildList {
                             // Live TV fork: the pages in the Live TV list.
@@ -1170,7 +1180,8 @@ open class MainActivity : ComponentActivity() {
                             // Live TV fork: the menu shows the Live TV list in place of the main
                             // menu (back to it with Back or the "‹ Live TV" row), so it's never
                             // taller than the main menu.
-                            if (liveTvPages.size >= 2 && liveTvGroupOpen) {
+                            // The classic menu shows its icons while closed: keep the main ones there.
+                            if (liveTvPages.size >= 2 && liveTvGroupOpen && (modernSidebarEnabled || sidebarOpenNow)) {
                                 add(
                                     DrawerItem(
                                         route = LIVE_TV_GROUP_ROUTE,
@@ -1330,7 +1341,9 @@ open class MainActivity : ComponentActivity() {
                                     onExitApp = handleExitApp,
                                     onToggleLiveTvGroup = { liveTvGroupOpen = !liveTvGroupOpen },
                                     onSidebarExpandedChange = { expanded ->
-                                        liveTvGroupOpen = expanded && onLiveTvGroupPage
+                                        sidebarOpenNow = expanded
+                                        // Closed: ready for next time (unchanged when opening).
+                                        if (!expanded) liveTvGroupOpen = onLiveTvGroupPage
                                     }
                                 )
                             } else {
@@ -1353,7 +1366,9 @@ open class MainActivity : ComponentActivity() {
                                     onExitApp = handleExitApp,
                                     onToggleLiveTvGroup = { liveTvGroupOpen = !liveTvGroupOpen },
                                     onSidebarExpandedChange = { expanded ->
-                                        liveTvGroupOpen = expanded && onLiveTvGroupPage
+                                        sidebarOpenNow = expanded
+                                        // Closed: ready for next time (unchanged when opening).
+                                        if (!expanded) liveTvGroupOpen = onLiveTvGroupPage
                                     }
                                 )
                             }
