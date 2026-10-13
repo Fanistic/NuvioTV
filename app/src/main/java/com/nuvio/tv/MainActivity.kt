@@ -1100,8 +1100,12 @@ open class MainActivity : ComponentActivity() {
                     // Which list the menu will open on is settled while it's closed (on a Live TV
                     // page: the Live TV list), so opening it never swaps one list for the other
                     // mid-open. That swap made the menu flicker open and shut several times.
-                    LaunchedEffect(onLiveTvGroupPage) {
-                        if (!sidebarOpenNow) liveTvGroupOpen = onLiveTvGroupPage
+                    // The classic menu opens on the main list and the Live TV list opens from it:
+                    // that menu closes the moment the highlight isn't on one of its items, and
+                    // changing lists as it opened left it with nothing highlighted, so it closed
+                    // and opened again several times.
+                    LaunchedEffect(onLiveTvGroupPage, modernSidebarEnabled) {
+                        if (!sidebarOpenNow) liveTvGroupOpen = modernSidebarEnabled && onLiveTvGroupPage
                     }
                     val rootRoutes = remember(discoverLocation, liveTvInSidebar, onDemandInSidebar) {
                         buildSet {
@@ -1343,7 +1347,7 @@ open class MainActivity : ComponentActivity() {
                                     onSidebarExpandedChange = { expanded ->
                                         sidebarOpenNow = expanded
                                         // Closed: ready for next time (unchanged when opening).
-                                        if (!expanded) liveTvGroupOpen = onLiveTvGroupPage
+                                        if (!expanded) liveTvGroupOpen = modernSidebarEnabled && onLiveTvGroupPage
                                     }
                                 )
                             } else {
@@ -1368,7 +1372,7 @@ open class MainActivity : ComponentActivity() {
                                     onSidebarExpandedChange = { expanded ->
                                         sidebarOpenNow = expanded
                                         // Closed: ready for next time (unchanged when opening).
-                                        if (!expanded) liveTvGroupOpen = onLiveTvGroupPage
+                                        if (!expanded) liveTvGroupOpen = modernSidebarEnabled && onLiveTvGroupPage
                                     }
                                 )
                             }
