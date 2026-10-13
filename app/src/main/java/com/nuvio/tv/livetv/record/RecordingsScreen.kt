@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,6 +22,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -97,8 +102,10 @@ class RecordingsViewModel @Inject constructor(
 }
 
 /**
- * Recordings: what's recording now and what's been recorded, newest first. OK plays (in
- * Nuvio's player, with its seek bar), the menu button or a long press offers Stop and Delete.
+ * Recordings: what's recording now across the top, then three columns: Scheduled, Series and
+ * Recorded. OK plays (in Nuvio's player, with its seek bar); the menu button or a long press
+ * offers Resume / Play from Beginning, Stop and Delete. Same background as the guide (the
+ * theme's glow at the top), not plain black.
  */
 @Composable
 fun RecordingsScreen(
@@ -118,6 +125,11 @@ fun RecordingsScreen(
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
     }
+    // The clock, for "recording until" bars (moves on every few seconds).
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) { kotlinx.coroutines.delay(5_000); nowMs = System.currentTimeMillis() }
+    }
     var seriesMenu by remember { mutableStateOf<SeriesRule?>(null) }
     LaunchedEffect(recordings) { viewModel.loadPosters(recordings) }
     var menuFor by remember { mutableStateOf<LiveTvRecording?>(null) }
@@ -127,97 +139,144 @@ fun RecordingsScreen(
 
     val now = recordings.filter { it.isRecording }
     val done = recordings.filter { !it.isRecording }
+    val playNow: (LiveTvRecording) -> Unit = { rec ->
+        // Nothing saved yet (it's still connecting): say so instead of an error.
+        if (rec.durationSec <= 0) LiveTvNotice.show(
+            "\"${rec.title}\" hasn't recorded anything yet" + (rec.problem?.let { ": $it" } ?: ". Give it a few seconds.")
+        )
+        else onPlay(viewModel.playUrl(rec), rec.title, posters[rec.id], rec.id, false)
+    }
+    // Which item gets the highlight first: the top of the first section that has anything.
+    val firstNowId = now.firstOrNull()?.id
+    val firstScheduleId = if (now.isEmpty()) schedules.firstOrNull()?.id else null
+    val firstSeriesId = if (now.isEmpty() && schedules.isEmpty()) seriesRules.firstOrNull()?.id else null
+    val firstDoneId = if (now.isEmpty() && schedules.isEmpty() && seriesRules.isEmpty()) done.firstOrNull()?.id else null
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colors.Background)
-            .padding(start = 56.dp, end = 48.dp, top = 36.dp)
     ) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            LiveText("Recordings", size = 30.sp, weight = FontWeight.Bold)
-            Spacer(Modifier.width(16.dp))
-            LiveText(
-                "${recordings.size} · ${sizeLabel(viewModel.freeBytes())} free",
-                size = 15.sp,
-                color = colors.TextSecondary
-            )
-        }
-        Spacer(Modifier.height(20.dp))
-        if (recordings.isEmpty() && schedules.isEmpty() && seriesRules.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    LiveText("No recordings yet", size = 20.sp, weight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
-                    LiveText(
-                        "In the Live TV guide, long-press a show and choose Record or Record series. While watching, open the menu and choose Record this show.",
-                        size = 14.sp, color = colors.TextSecondary, maxLines = 2
-                    )
-                }
-            }
-            return@Column
-        }
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(bottom = 48.dp)
+        // The guide's background: the theme's glow behind the top of the screen.
+        com.nuvio.tv.livetv.ui.ThemeGlow(Modifier.fillMaxWidth().height(260.dp))
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = 56.dp, end = 48.dp, top = 32.dp)
         ) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                LiveText("Recordings", size = 30.sp, weight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                LiveText(
+                    "${sizeLabel(viewModel.freeBytes())} free",
+                    size = 15.sp,
+                    color = colors.TextSecondary
+                )
+            }
+            Spacer(Modifier.height(20.dp))
+            if (recordings.isEmpty() && schedules.isEmpty() && seriesRules.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        LiveText("No recordings yet", size = 20.sp, weight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(8.dp))
+                        LiveText(
+                            "In the Live TV guide, long-press a show and choose Record or Record series. While watching, open the menu and choose Record this show.",
+                            size = 14.sp, color = colors.TextSecondary, maxLines = 2
+                        )
+                    }
+                }
+                return@Column
+            }
+
+            // ---- Recording now: a wide card each, across the top.
             if (now.isNotEmpty()) {
-                item(key = "h_now") { SectionTitle("Recording Now") }
-                items(now, key = { it.id }) { rec ->
-                    RecordingRow(
-                        rec, posters[rec.id],
-                        modifier = if (rec == recordings.firstOrNull()) Modifier.focusRequester(first) else Modifier,
-                        onClick = {
-                            // Nothing saved yet (it's still connecting): say so instead of an error.
-                            if (rec.durationSec <= 0) LiveTvNotice.show(
-                                "\"${rec.title}\" hasn't recorded anything yet" + (rec.problem?.let { ": $it" } ?: ". Give it a few seconds.")
+                SectionTitle("Recording Now", color = LIVE_RED)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    now.take(2).forEach { rec ->
+                        RecordingNowCard(
+                            rec = rec,
+                            image = posters[rec.id] ?: rec.channelLogo,
+                            isPoster = posters[rec.id] != null,
+                            nowMs = nowMs,
+                            watchModifier = if (rec.id == firstNowId) Modifier.focusRequester(first) else Modifier,
+                            onWatch = { playNow(rec) },
+                            onStop = { viewModel.stop(rec) },
+                            onMenu = { menuFor = rec }
+                        )
+                    }
+                    if (now.size > 2) {
+                        LiveText("And ${now.size - 2} more recording now", size = 14.sp, color = colors.TextSecondary)
+                    }
+                }
+                Spacer(Modifier.height(22.dp))
+            }
+
+            // ---- Scheduled · Series · Recorded, side by side.
+            Row(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Column(Modifier.weight(1f)) {
+                    SectionTitle("Scheduled")
+                    if (schedules.isEmpty()) EmptyNote("Nothing scheduled")
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(bottom = 40.dp)
+                    ) {
+                        items(schedules, key = { it.id }) { s ->
+                            InfoCard(
+                                title = s.title + (s.episode?.let { "  ·  $it" } ?: ""),
+                                line = s.channel.name + " · " + dateLabel(s.startMs),
+                                note = if (s.useCatchup) "From catch-up after it ends" + (if (s.attempts > 0) " (trying again)" else "") else null,
+                                modifier = if (s.id == firstScheduleId) Modifier.focusRequester(first) else Modifier,
+                                onClick = { scheduleMenu = s }
                             )
-                            else onPlay(viewModel.playUrl(rec), rec.title, posters[rec.id], rec.id, false)
-                        },
-                        onMenu = { menuFor = rec }
-                    )
+                        }
+                    }
                 }
-            }
-            if (schedules.isNotEmpty()) {
-                item(key = "h_sched") { SectionTitle("Scheduled") }
-                items(schedules, key = { it.id }) { s ->
-                    SimpleRow(
-                        title = s.title + (s.episode?.let { "  ·  $it" } ?: ""),
-                        line = s.channel.name + " · " + dateLabel(s.startMs),
-                        note = if (s.useCatchup) "Saved from catch-up after it ends" + (if (s.attempts > 0) " (trying again)" else "")
-                            else "Records live, 2 min early to 5 min late",
-                        logo = s.channel.logo,
-                        modifier = if (recordings.isEmpty() && s == schedules.first()) Modifier.focusRequester(first) else Modifier,
-                        onClick = { scheduleMenu = s }
-                    )
+                Column(Modifier.weight(1f)) {
+                    SectionTitle("Series")
+                    if (seriesRules.isEmpty()) EmptyNote("No series set to record")
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(bottom = 40.dp)
+                    ) {
+                        items(seriesRules, key = { it.id }) { r ->
+                            InfoCard(
+                                title = r.title,
+                                line = r.channel.name + " · " + (if (r.keepLast > 0) "Keep last ${r.keepLast}" else "Keep all"),
+                                note = null,
+                                modifier = if (r.id == firstSeriesId) Modifier.focusRequester(first) else Modifier,
+                                onClick = { seriesMenu = r }
+                            )
+                        }
+                    }
                 }
-            }
-            if (seriesRules.isNotEmpty()) {
-                item(key = "h_series") { SectionTitle("Series") }
-                items(seriesRules, key = { it.id }) { r ->
-                    SimpleRow(
-                        title = r.title,
-                        line = "Every airing on " + r.channel.name + (if (r.keepLast > 0) " · keeps the last ${r.keepLast}" else ""),
-                        note = null,
-                        logo = r.channel.logo,
-                        modifier = if (recordings.isEmpty() && schedules.isEmpty() && r == seriesRules.first()) Modifier.focusRequester(first) else Modifier,
-                        onClick = { seriesMenu = r }
-                    )
-                }
-            }
-            if (done.isNotEmpty()) {
-                item(key = "h_done") { SectionTitle("Recorded") }
-                items(done, key = { it.id }) { rec ->
-                    RecordingRow(
-                        rec, posters[rec.id],
-                        resumeFraction = resumeTick.let { viewModel.resume(rec) }?.let { ms -> if (rec.durationSec > 0) (ms / 1000.0 / rec.durationSec).toFloat().coerceIn(0f, 1f) else null },
-                        modifier = if (rec == recordings.firstOrNull()) Modifier.focusRequester(first) else Modifier,
-                        onClick = {
-                            if (rec.status != RecordingStatus.FAILED) onPlay(viewModel.playUrl(rec), rec.title, posters[rec.id], rec.id, false)
-                            else menuFor = rec
-                        },
-                        onMenu = { menuFor = rec }
-                    )
+                Column(Modifier.weight(1.4f)) {
+                    SectionTitle("Recorded")
+                    if (done.isEmpty()) EmptyNote("Nothing recorded yet")
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        contentPadding = PaddingValues(bottom = 40.dp)
+                    ) {
+                        gridItems(done, key = { it.id }) { rec ->
+                            RecordedCard(
+                                rec = rec,
+                                image = posters[rec.id] ?: rec.channelLogo,
+                                isPoster = posters[rec.id] != null,
+                                resumeFraction = resumeTick.let { viewModel.resume(rec) }?.let { ms ->
+                                    if (rec.durationSec > 0) (ms / 1000.0 / rec.durationSec).toFloat().coerceIn(0f, 1f) else null
+                                },
+                                modifier = if (rec.id == firstDoneId) Modifier.focusRequester(first) else Modifier,
+                                onClick = {
+                                    if (rec.status != RecordingStatus.FAILED) onPlay(viewModel.playUrl(rec), rec.title, posters[rec.id], rec.id, false)
+                                    else menuFor = rec
+                                },
+                                onMenu = { menuFor = rec }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -278,37 +337,152 @@ fun RecordingsScreen(
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+private fun SectionTitle(text: String, color: Color = NuvioTheme.colors.TextSecondary) {
     LiveText(
         text.uppercase(),
         size = 13.sp,
         weight = FontWeight.Bold,
-        color = NuvioTheme.colors.TextSecondary,
-        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+        color = color,
+        modifier = Modifier.padding(bottom = 10.dp)
     )
 }
 
 @Composable
-private fun RecordingRow(
+private fun EmptyNote(text: String) {
+    LiveText(text, size = 14.sp, color = NuvioTheme.colors.TextTertiary, modifier = Modifier.padding(top = 4.dp))
+}
+
+/** A card's look: the guide's tile color, the theme's focus color and ring when highlighted. */
+@Composable
+private fun cardColors(focused: Boolean): Pair<Color, Color> {
+    val colors = NuvioTheme.colors
+    return (if (focused) colors.FocusBackground else com.nuvio.tv.livetv.ui.guideSurface()) to
+        (if (focused) colors.FocusRing else Color.Transparent)
+}
+
+/** Show art (a poster, cropped) or the channel's logo (whole, on the tile color). */
+@Composable
+private fun Thumb(image: String?, isPoster: Boolean, modifier: Modifier, content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {}) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(liveCorner()))
+            .background(NuvioTheme.colors.BackgroundCard),
+        contentAlignment = Alignment.Center
+    ) {
+        if (image != null) {
+            AsyncImage(
+                model = image,
+                contentDescription = null,
+                contentScale = if (isPoster) ContentScale.Crop else ContentScale.Fit,
+                alignment = if (isPoster) Alignment.TopCenter else Alignment.Center,
+                modifier = Modifier.fillMaxSize().padding(if (isPoster) 0.dp else 14.dp)
+            )
+        }
+        content()
+    }
+}
+
+@Composable
+private fun RecTag() {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(5.dp))
+            .background(LIVE_RED)
+            .padding(horizontal = 7.dp, vertical = 2.dp)
+    ) {
+        LiveText("REC", size = 12.sp, weight = FontWeight.Bold, color = Color.White)
+    }
+}
+
+@Composable
+private fun ProgressLine(fraction: Float, color: Color, modifier: Modifier) {
+    Box(modifier.height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color.White.copy(alpha = 0.18f))) {
+        Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f)).background(color))
+    }
+}
+
+/** What's recording now: art, REC, title, channel and times, how far along, Watch and Stop. */
+@Composable
+private fun RecordingNowCard(
     rec: LiveTvRecording,
-    poster: String?,
-    modifier: Modifier,
-    /** How much has been watched (0..1), if started. */
-    resumeFraction: Float? = null,
+    image: String?,
+    isPoster: Boolean,
+    nowMs: Long,
+    watchModifier: Modifier,
+    onWatch: () -> Unit,
+    onStop: () -> Unit,
+    onMenu: () -> Unit
+) {
+    val colors = NuvioTheme.colors
+    val shape = RoundedCornerShape(liveCorner())
+    var watchFocused by remember { mutableStateOf(false) }
+    var stopFocused by remember { mutableStateOf(false) }
+    val (bg, ring) = cardColors(watchFocused || stopFocused)
+    val time = SimpleDateFormat("h:mm a", Locale.getDefault())
+    val from = rec.programStartMs.takeIf { it > 0 } ?: rec.startedAtMs
+    val to = rec.programStopMs.takeIf { it > 0 } ?: rec.stopAtMs
+    val fraction = if (rec.stopAtMs > rec.startedAtMs) ((nowMs - rec.startedAtMs).toFloat() / (rec.stopAtMs - rec.startedAtMs)) else 0f
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(112.dp)
+            .clip(shape)
+            .background(bg)
+            .border(2.dp, ring, shape)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Thumb(image, isPoster, Modifier.width(156.dp).fillMaxHeight())
+        Spacer(Modifier.width(18.dp))
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                RecTag()
+                Spacer(Modifier.width(10.dp))
+                LiveText(rec.title, size = 20.sp, weight = FontWeight.Bold, marquee = watchFocused || stopFocused, modifier = Modifier.weight(1f, fill = false))
+            }
+            val status = when {
+                rec.durationSec <= 0 -> "Starting…" + (rec.problem?.let { " ($it)" } ?: "")
+                else -> durationLabel(rec.durationSec) + " recorded" + (rec.problem?.let { " · $it" } ?: "")
+            }
+            LiveText(
+                listOf(rec.channelName, time.format(Date(from)) + " – " + time.format(Date(to)), status).joinToString(" · "),
+                size = 14.sp,
+                color = colors.TextSecondary
+            )
+            ProgressLine(fraction, LIVE_RED, Modifier.fillMaxWidth(0.9f))
+        }
+        Spacer(Modifier.width(16.dp))
+        PillButton("Watch", primary = true, modifier = watchModifier, onFocus = { watchFocused = it }, onClick = onWatch, onMenu = onMenu)
+        Spacer(Modifier.width(10.dp))
+        PillButton("Stop", primary = false, onFocus = { stopFocused = it }, onClick = onStop, onMenu = onMenu)
+    }
+}
+
+@Composable
+private fun PillButton(
+    label: String,
+    primary: Boolean,
+    modifier: Modifier = Modifier,
+    onFocus: (Boolean) -> Unit,
     onClick: () -> Unit,
     onMenu: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
     val colors = NuvioTheme.colors
-    val shape = RoundedCornerShape(liveCorner())
-    Row(
+    val shape = RoundedCornerShape(50)
+    val bg = when {
+        focused -> colors.TextPrimary
+        primary -> colors.TextPrimary.copy(alpha = 0.85f)
+        else -> Color.White.copy(alpha = 0.10f)
+    }
+    val fg = if (focused || primary) colors.Background else colors.TextPrimary
+    Box(
         modifier = modifier
-            .fillMaxWidth()
-            .height(112.dp)
+            .height(44.dp)
             .clip(shape)
-            .background(if (focused) colors.FocusBackground else colors.BackgroundCard)
+            .background(bg)
             .border(2.dp, if (focused) colors.FocusRing else Color.Transparent, shape)
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
             .onPreviewKeyEvent { e ->
                 if (e.type == KeyEventType.KeyDown && e.key == Key.Menu) { onMenu(); true } else false
             }
@@ -318,93 +492,32 @@ private fun RecordingRow(
                 onClick = onClick,
                 onLongClick = onMenu
             )
-            .padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 22.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .size(width = 62.dp, height = 92.dp)
-                .clip(RoundedCornerShape(liveCorner()))
-                .background(colors.BackgroundElevated),
-            contentAlignment = Alignment.Center
-        ) {
-            val image = poster ?: rec.channelLogo
-            if (image != null) {
-                AsyncImage(
-                    model = image,
-                    contentDescription = null,
-                    contentScale = if (poster != null) ContentScale.Crop else ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().padding(if (poster != null) 0.dp else 8.dp)
-                )
-            }
-        }
-        Spacer(Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (rec.isRecording) {
-                    LiveText("● REC", size = 13.sp, weight = FontWeight.Bold, color = LIVE_RED)
-                    Spacer(Modifier.width(8.dp))
-                }
-                LiveText(rec.title, size = 18.sp, weight = FontWeight.SemiBold, modifier = Modifier.weight(1f, fill = false), marquee = focused)
-                rec.episode?.let {
-                    Spacer(Modifier.width(8.dp))
-                    LiveText(it, size = 14.sp, color = colors.TextSecondary)
-                }
-            }
-            LiveText(
-                listOfNotNull(
-                    rec.channelName,
-                    dateLabel(rec.programStartMs.takeIf { it > 0 } ?: rec.startedAtMs),
-                    durationLabel(rec.durationSec).takeIf { rec.durationSec > 0 },
-                    sizeLabel(rec.sizeBytes).takeIf { rec.sizeBytes > 0 }
-                ).joinToString(" · "),
-                size = 14.sp,
-                color = colors.TextSecondary
-            )
-            val status = when {
-                rec.isRecording && rec.durationSec <= 0 -> "Starting…" + (rec.problem?.let { " ($it)" } ?: "")
-                rec.isRecording -> "Recording until " + SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(rec.stopAtMs)) +
-                    (rec.problem?.let { " · $it" } ?: "")
-                rec.status == RecordingStatus.FAILED -> rec.problem ?: "Couldn't be recorded"
-                else -> rec.problem
-            }
-            status?.let {
-                LiveText(
-                    it, size = 13.sp,
-                    color = if (rec.status == RecordingStatus.FAILED) colors.Error else colors.TextTertiary,
-                    maxLines = 1
-                )
-            }
-            // Partly watched: how far.
-            resumeFraction?.let { f ->
-                Box(Modifier.padding(top = 4.dp).width(220.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(colors.TextTertiary.copy(alpha = 0.3f))) {
-                    Box(Modifier.fillMaxSize().padding(end = (220 * (1f - f)).dp).background(colors.Secondary))
-                }
-            }
-        }
+        LiveText(label, size = 16.sp, weight = FontWeight.SemiBold, color = fg)
     }
 }
 
-/** A scheduled show or a series rule: channel logo, title and when. */
+/** A scheduled show or a series: title, and a line under it. */
 @Composable
-private fun SimpleRow(
+private fun InfoCard(
     title: String,
     line: String,
     note: String?,
-    logo: String?,
     modifier: Modifier,
     onClick: () -> Unit
 ) {
     var focused by remember { mutableStateOf(false) }
     val colors = NuvioTheme.colors
     val shape = RoundedCornerShape(liveCorner())
-    Row(
+    val (bg, ring) = cardColors(focused)
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .height(76.dp)
             .clip(shape)
-            .background(if (focused) colors.FocusBackground else colors.BackgroundCard)
-            .border(2.dp, if (focused) colors.FocusRing else Color.Transparent, shape)
+            .background(bg)
+            .border(2.dp, ring, shape)
             .onFocusChanged { focused = it.isFocused }
             .combinedClickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -412,18 +525,75 @@ private fun SimpleRow(
                 onClick = onClick,
                 onLongClick = onClick
             )
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        Box(Modifier.size(width = 72.dp, height = 48.dp), contentAlignment = Alignment.Center) {
-            if (logo != null) AsyncImage(model = logo, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+        LiveText(title, size = 17.sp, weight = FontWeight.SemiBold, marquee = focused)
+        LiveText(line, size = 14.sp, color = colors.TextSecondary)
+        note?.let { LiveText(it, size = 12.sp, color = colors.TextTertiary) }
+    }
+}
+
+/** A finished recording: art with how much you've watched, then title, day and length. */
+@Composable
+private fun RecordedCard(
+    rec: LiveTvRecording,
+    image: String?,
+    isPoster: Boolean,
+    resumeFraction: Float?,
+    modifier: Modifier,
+    onClick: () -> Unit,
+    onMenu: () -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+    val colors = NuvioTheme.colors
+    val shape = RoundedCornerShape(liveCorner())
+    val failed = rec.status == RecordingStatus.FAILED
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown && e.key == Key.Menu) { onMenu(); true } else false
+            }
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+                onLongClick = onMenu
+            ),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Thumb(
+            image, isPoster,
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .border(2.dp, if (focused) colors.FocusRing else Color.Transparent, shape)
+        ) {
+            resumeFraction?.let { f ->
+                ProgressLine(
+                    f, colors.Secondary,
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp)
+                )
+            }
         }
-        Spacer(Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            LiveText(title, size = 17.sp, weight = FontWeight.SemiBold, marquee = focused)
-            LiveText(line, size = 14.sp, color = colors.TextSecondary)
-            note?.let { LiveText(it, size = 12.sp, color = colors.TextTertiary) }
-        }
+        LiveText(
+            rec.title + (rec.episode?.let { " · $it" } ?: ""),
+            size = 15.sp,
+            weight = FontWeight.SemiBold,
+            color = if (focused) colors.TextPrimary else colors.TextPrimary.copy(alpha = 0.9f),
+            marquee = focused
+        )
+        LiveText(
+            if (failed) rec.problem ?: "Couldn't be recorded"
+            else listOfNotNull(
+                shortDayLabel(rec.programStartMs.takeIf { it > 0 } ?: rec.startedAtMs),
+                durationLabel(rec.durationSec).takeIf { rec.durationSec > 0 }
+            ).joinToString(" · ") + (rec.problem?.let { " · $it" } ?: ""),
+            size = 13.sp,
+            color = if (failed) colors.Error else colors.TextSecondary
+        )
     }
 }
 
@@ -450,8 +620,27 @@ private fun RecordingActionDialog(
     }
 }
 
-private fun dateLabel(ms: Long): String =
-    SimpleDateFormat("EEE d MMM, h:mm a", Locale.getDefault()).format(Date(ms))
+private fun dateLabel(ms: Long): String {
+    val day = shortDayLabel(ms)
+    return day + ", " + SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(ms))
+}
+
+/** "Today", "Tomorrow", "Yesterday", the weekday within a week, else the date. */
+private fun shortDayLabel(ms: Long): String {
+    val cal = java.util.Calendar.getInstance()
+    fun dayIndex(t: Long): Long {
+        cal.timeInMillis = t
+        return cal.get(java.util.Calendar.YEAR) * 400L + cal.get(java.util.Calendar.DAY_OF_YEAR)
+    }
+    val diff = dayIndex(ms) - dayIndex(System.currentTimeMillis())
+    return when {
+        diff == 0L -> "Today"
+        diff == 1L -> "Tomorrow"
+        diff == -1L -> "Yesterday"
+        diff in -6L..6L -> SimpleDateFormat("EEE", Locale.getDefault()).format(Date(ms))
+        else -> SimpleDateFormat("EEE d MMM", Locale.getDefault()).format(Date(ms))
+    }
+}
 
 private fun durationLabel(sec: Double): String {
     val m = (sec / 60).toInt()

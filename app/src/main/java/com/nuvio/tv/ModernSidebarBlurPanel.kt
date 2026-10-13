@@ -20,8 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -48,6 +47,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
@@ -196,15 +196,17 @@ internal fun ModernSidebarBlurPanel(
 
         Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
 
+        // Live TV fork: the list starts just under the logo (centred, a longer list grew up
+        // into it).
+        Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            verticalArrangement = Arrangement.Center,
+            verticalArrangement = Arrangement.Top,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Column(
-                modifier = Modifier.offset(y = (-12).dp),
                 verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm - NuvioTheme.spacing.xxs)
             ) {
                 drawerItems.forEachIndexed { index, item ->
@@ -223,14 +225,10 @@ internal fun ModernSidebarBlurPanel(
                                 }
                             },
                             onClick = { onDrawerItemClick(item.route) },
-                            // Live TV fork: the Live TV group (its pages indented under it).
-                            child = item.isChild,
+                            // Live TV fork: recording dot, and the arrow on Live TV (opens its list).
                             badge = item.badge,
-                            trailingIcon = if (item.isGroup) {
-                                if (item.groupOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore
-                            } else null,
+                            trailingIcon = if (item.isGroup && !item.groupOpen) Icons.Default.ChevronRight else null,
                             modifier = Modifier
-                                .then(if (item.isChild) Modifier.padding(start = 24.dp) else Modifier)
                                 .fillMaxWidth(0.92f)
                                 .focusRequester(drawerItemFocusRequesters.getValue(item.route))
                         )
@@ -252,7 +250,6 @@ private fun SidebarNavigationItem(
     iconScale: Float,
     onFocusChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
-    child: Boolean = false,
     badge: Boolean = false,
     trailingIcon: ImageVector? = null,
     onClick: () -> Unit
@@ -340,20 +337,15 @@ private fun SidebarNavigationItem(
                     this.selected = selected
                 }
                 .fillMaxWidth()
-                .padding(
-                    horizontal = NuvioTheme.spacing.lg - NuvioTheme.spacing.xxs,
-                    // Live TV fork: a group's pages are a little shorter.
-                    vertical = if (child) NuvioTheme.spacing.sm else NuvioTheme.spacing.sm + NuvioTheme.spacing.xxs
-                ),
+                .padding(horizontal = NuvioTheme.spacing.lg - NuvioTheme.spacing.xxs, vertical = NuvioTheme.spacing.sm + NuvioTheme.spacing.xxs),
             verticalAlignment = Alignment.CenterVertically
         ) {
         Box(
             modifier = Modifier
                 .size(SidebarLeadingVisualSize)
                 .graphicsLayer {
-                    val s = if (child) iconScale * 0.85f else iconScale
-                    scaleX = s
-                    scaleY = s
+                    scaleX = iconScale
+                    scaleY = iconScale
                 },
             contentAlignment = Alignment.Center
         ) {
@@ -384,26 +376,29 @@ private fun SidebarNavigationItem(
                     modifier = iconModifier
                 )
             }
+            // Live TV fork: something is recording: a small red dot on the icon, like a badge.
+            if (badge) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(9.dp)
+                        .background(Color(0xFFE53935), CircleShape)
+                )
+            }
         }
         Spacer(modifier = Modifier.width(SidebarContentGap))
 
-        AutoResizeText(
+        // Live TV fork: every label the same size (a long one ends in "…" rather than shrinking,
+        // which left the menu's labels in all different sizes).
+        Text(
             text = label,
             color = contentColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .weight(1f)
                 .graphicsLayer { alpha = labelAlpha }
         )
-        // Live TV fork: recording dot and the open/close arrow of a group.
-        if (badge) {
-            Spacer(modifier = Modifier.width(8.dp))
-            Box(
-                modifier = Modifier
-                    .size(9.dp)
-                    .graphicsLayer { alpha = labelAlpha }
-                    .background(Color(0xFFE53935), CircleShape)
-            )
-        }
         if (trailingIcon != null) {
             Spacer(modifier = Modifier.width(6.dp))
             Icon(
@@ -411,7 +406,7 @@ private fun SidebarNavigationItem(
                 contentDescription = null,
                 tint = contentColor,
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(22.dp)
                     .graphicsLayer { alpha = labelAlpha }
             )
         }

@@ -54,8 +54,8 @@ import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.RadioButtonChecked
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
@@ -244,12 +244,12 @@ data class DrawerItem(
     val label: String,
     val iconRes: Int? = null,
     val icon: ImageVector? = null,
-    // Live TV fork: the menu's Live TV group (opens to Guide, On Demand and Recordings).
-    /** A heading that opens and closes its group instead of opening a page. */
+    // Live TV fork: the menu's Live TV entry (opens a list: Guide, On Demand and Recordings).
+    /** Opens its own list (or, as that list's top row, goes back) instead of opening a page. */
     val isGroup: Boolean = false,
-    /** The group is open (shows its pages under it). */
+    /** The group's list is showing (this is its "‹ back" row). */
     val groupOpen: Boolean = false,
-    /** A page inside a group (drawn indented). */
+    /** A page in a group's list. */
     val isChild: Boolean = false,
     /** A small red dot (something is recording). */
     val badge: Boolean = false,
@@ -1085,9 +1085,9 @@ open class MainActivity : ComponentActivity() {
                     val recordingNow = allRecordings.any {
                         it.status == com.nuvio.tv.livetv.record.RecordingStatus.RECORDING
                     }
-                    // Live TV fork: Guide, On Demand and Recordings sit together under one "Live TV"
-                    // entry that opens in place. It's open while you're on one of its pages, and
-                    // closes again when you go elsewhere.
+                    // Live TV fork: Guide, On Demand and Recordings sit in their own list, opened
+                    // from one "Live TV" entry. The menu opens straight to that list while you're on
+                    // one of its pages, and goes back to the main menu when it closes.
                     val liveTvGroupRoutes = remember {
                         listOf(Screen.LiveTv.route, Screen.OnDemand.route, Screen.Recordings.route)
                     }
@@ -1095,9 +1095,6 @@ open class MainActivity : ComponentActivity() {
                         currentRoute == it || currentRoute?.startsWith("$it/") == true
                     }
                     var liveTvGroupOpen by remember { mutableStateOf(false) }
-                    LaunchedEffect(onLiveTvGroupPage, currentRoute) {
-                        liveTvGroupOpen = onLiveTvGroupPage
-                    }
                     val rootRoutes = remember(discoverLocation, liveTvInSidebar, onDemandInSidebar) {
                         buildSet {
                             add(Screen.Home.route)
@@ -1135,23 +1132,7 @@ open class MainActivity : ComponentActivity() {
                         liveTvGroupOpen
                     ) {
                         buildList {
-                            add(
-                                DrawerItem(
-                                    route = Screen.Home.route,
-                                    label = strNavHome,
-                                    icon = Icons.Default.Home
-                                )
-                            )
-                            if (discoverLocation == DiscoverLocation.IN_SIDEBAR) {
-                                add(
-                                    DrawerItem(
-                                        route = Screen.Discover.route,
-                                        label = strNavDiscover,
-                                        icon = Icons.Default.Explore
-                                    )
-                                )
-                            }
-                            // Live TV fork: one "Live TV" entry that opens to its pages.
+                            // Live TV fork: the pages in the Live TV list.
                             val liveTvPages = buildList {
                                 if (liveTvInSidebar) {
                                     add(
@@ -1186,6 +1167,39 @@ open class MainActivity : ComponentActivity() {
                                     )
                                 }
                             }
+                            // Live TV fork: the menu shows the Live TV list in place of the main
+                            // menu (back to it with Back or the "‹ Live TV" row), so it's never
+                            // taller than the main menu.
+                            if (liveTvPages.size >= 2 && liveTvGroupOpen) {
+                                add(
+                                    DrawerItem(
+                                        route = LIVE_TV_GROUP_ROUTE,
+                                        label = "Live TV",
+                                        icon = Icons.Default.ChevronLeft,
+                                        isGroup = true,
+                                        groupOpen = true
+                                    )
+                                )
+                                addAll(liveTvPages)
+                                return@buildList
+                            }
+                            add(
+                                DrawerItem(
+                                    route = Screen.Home.route,
+                                    label = strNavHome,
+                                    icon = Icons.Default.Home
+                                )
+                            )
+                            if (discoverLocation == DiscoverLocation.IN_SIDEBAR) {
+                                add(
+                                    DrawerItem(
+                                        route = Screen.Discover.route,
+                                        label = strNavDiscover,
+                                        icon = Icons.Default.Explore
+                                    )
+                                )
+                            }
+                            // Live TV fork: one "Live TV" entry that opens its own list.
                             if (liveTvPages.size >= 2) {
                                 add(
                                     DrawerItem(
@@ -1193,14 +1207,11 @@ open class MainActivity : ComponentActivity() {
                                         label = "Live TV",
                                         icon = Icons.Default.LiveTv,
                                         isGroup = true,
-                                        groupOpen = liveTvGroupOpen,
-                                        // While closed, the dot moves up to the heading.
-                                        badge = recordingNow && !liveTvGroupOpen
+                                        badge = recordingNow
                                     )
                                 )
-                                if (liveTvGroupOpen) addAll(liveTvPages)
                             } else {
-                                // Only one of them to show: a plain entry, no group.
+                                // Only one of them to show: a plain entry, no list.
                                 liveTvPages.firstOrNull()?.let { only ->
                                     val isGuide = only.route == Screen.LiveTv.route
                                     add(
@@ -1317,7 +1328,10 @@ open class MainActivity : ComponentActivity() {
                                     onSwitchProfile = handleSwitchProfile,
                                     onNavigate = { optimisticRoute = it },
                                     onExitApp = handleExitApp,
-                                    onToggleLiveTvGroup = { liveTvGroupOpen = !liveTvGroupOpen }
+                                    onToggleLiveTvGroup = { liveTvGroupOpen = !liveTvGroupOpen },
+                                    onSidebarExpandedChange = { expanded ->
+                                        liveTvGroupOpen = expanded && onLiveTvGroupPage
+                                    }
                                 )
                             } else {
                                 LegacySidebarScaffold(
@@ -1337,7 +1351,10 @@ open class MainActivity : ComponentActivity() {
                                     onSwitchProfile = handleSwitchProfile,
                                     onNavigate = { optimisticRoute = it },
                                     onExitApp = handleExitApp,
-                                    onToggleLiveTvGroup = { liveTvGroupOpen = !liveTvGroupOpen }
+                                    onToggleLiveTvGroup = { liveTvGroupOpen = !liveTvGroupOpen },
+                                    onSidebarExpandedChange = { expanded ->
+                                        liveTvGroupOpen = expanded && onLiveTvGroupPage
+                                    }
                                 )
                             }
 
@@ -1550,7 +1567,8 @@ private fun LegacySidebarScaffold(
     onSwitchProfile: () -> Unit,
     onNavigate: (String) -> Unit,
     onExitApp: () -> Unit,
-    onToggleLiveTvGroup: () -> Unit = {}
+    onToggleLiveTvGroup: () -> Unit = {},
+    onSidebarExpandedChange: (Boolean) -> Unit = {}
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val drawerItemFocusRequesters = rememberDrawerItemFocusRequesters(drawerItems)
@@ -1595,6 +1613,26 @@ private fun LegacySidebarScaffold(
     LaunchedEffect(drawerState.currentValue) {
         if (drawerState.currentValue == DrawerValue.Open) com.nuvio.tv.livetv.home.LiveTvHomeFocus.menuOpened()
         else if (currentRoute == Screen.Home.route) com.nuvio.tv.livetv.home.LiveTvHomeFocus.menuClosed()
+        onSidebarExpandedChange(drawerState.currentValue == DrawerValue.Open)
+    }
+
+    // Live TV fork: Back in the Live TV list returns to the main menu.
+    val liveTvListShowing = drawerItems.any { it.isGroup && it.groupOpen }
+    BackHandler(enabled = currentRoute in rootRoutes && drawerState.currentValue == DrawerValue.Open && liveTvListShowing) {
+        if (longPressBackHeld.value) return@BackHandler
+        onToggleLiveTvGroup()
+    }
+    // Live TV fork: opening the Live TV list puts the highlight on its first page (or the one
+    // you're on).
+    var pendingLiveTvListFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(drawerItems, pendingLiveTvListFocus) {
+        if (!pendingLiveTvListFocus) return@LaunchedEffect
+        val pages = drawerItems.filter { it.isChild }
+        if (pages.isEmpty()) return@LaunchedEffect
+        val target = pages.firstOrNull { it.route == selectedDrawerRoute } ?: pages.first()
+        repeat(2) { withFrameNanos { } }
+        runCatching { drawerItemFocusRequesters[target.route]?.requestFocus() }
+        pendingLiveTvListFocus = false
     }
 
     LaunchedEffect(drawerState.currentValue, pendingContentFocusTransfer) {
@@ -1742,12 +1780,11 @@ private fun LegacySidebarScaffold(
                                     selected = selectedDrawerRoute == item.route,
                                     expanded = isExpanded,
                                     badge = item.badge,
-                                    trailingIcon = if (item.isGroup) {
-                                        if (item.groupOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore
-                                    } else null,
+                                    trailingIcon = if (item.isGroup && !item.groupOpen) Icons.Default.ChevronRight else null,
                                     onClick = onClick@{
-                                        // Live TV fork: the Live TV heading opens/closes its group.
+                                        // Live TV fork: Live TV opens its list; its "‹ Live TV" row goes back.
                                         if (item.isGroup) {
+                                            if (!item.groupOpen) pendingLiveTvListFocus = true
                                             onToggleLiveTvGroup()
                                             return@onClick
                                         }
@@ -1764,9 +1801,8 @@ private fun LegacySidebarScaffold(
                                     modifier = Modifier.focusRequester(
                                         drawerItemFocusRequesters.getValue(item.route)
                                     )
-                                        // Live TV fork: a group's pages sit indented under it.
-                                        .width(if (item.isChild && isExpanded) itemWidth - 24.dp else itemWidth)
-                                        .offset(x = NuvioTheme.spacing.md + if (item.isChild && isExpanded) 24.dp else 0.dp)
+                                        .width(itemWidth)
+                                        .offset(x = NuvioTheme.spacing.md)
                                 )
                         }
                     }
@@ -1948,50 +1984,41 @@ private fun LegacySidebarButton(
                 .align(Alignment.CenterStart)
                 .offset(x = 13.dp)
         )
-        if (expanded) {
-            val hasTrailing = badge || trailingIcon != null
-            com.nuvio.tv.ui.components.AutoResizeText(
-                text = label,
-                color = contentColor,
-                textAlign = TextAlign.Start,
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 54.dp, end = if (hasTrailing) 52.dp else 14.dp)
-            )
-            // Live TV fork: recording dot and the open/close arrow of a group.
-            if (hasTrailing) {
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .padding(end = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (badge) {
-                        Box(
-                            modifier = Modifier
-                                .size(9.dp)
-                                .background(Color(0xFFE53935), CircleShape)
-                        )
-                    }
-                    if (trailingIcon != null) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Icon(
-                            imageVector = trailingIcon,
-                            contentDescription = null,
-                            tint = contentColor,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-            }
-        } else if (badge) {
+        // Live TV fork: something is recording: a small red dot on the icon, like a badge.
+        if (badge) {
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .offset(x = 33.dp, y = (-10).dp)
-                    .size(8.dp)
+                    .offset(x = 13.dp + NuvioComponents.tokens.sidebar.iconSize - 6.dp, y = (-9).dp)
+                    .size(9.dp)
                     .background(Color(0xFFE53935), CircleShape)
             )
+        }
+        if (expanded) {
+            // Live TV fork: every label the same size (a long one ends in "…" rather than
+            // shrinking, which left the menu's labels in all different sizes).
+            Text(
+                text = label,
+                color = contentColor,
+                textAlign = TextAlign.Start,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 54.dp, end = if (trailingIcon != null) 44.dp else 14.dp)
+            )
+            // Live TV fork: the arrow on an entry that opens its own list.
+            if (trailingIcon != null) {
+                Icon(
+                    imageVector = trailingIcon,
+                    contentDescription = null,
+                    tint = contentColor,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 14.dp)
+                        .size(22.dp)
+                )
+            }
         }
     }
 }
@@ -2017,7 +2044,8 @@ private fun ModernSidebarScaffold(
     onSwitchProfile: () -> Unit,
     onNavigate: (String) -> Unit,
     onExitApp: () -> Unit,
-    onToggleLiveTvGroup: () -> Unit = {}
+    onToggleLiveTvGroup: () -> Unit = {},
+    onSidebarExpandedChange: (Boolean) -> Unit = {}
 ) {
     // Live TV fork: full screen now happens inside the Live TV screen (one video view that just
     // grows), which is one of the menu's pages, so the menu has to step aside for it.
@@ -2167,6 +2195,26 @@ private fun ModernSidebarScaffold(
     LaunchedEffect(isSidebarExpanded) {
         if (isSidebarExpanded) com.nuvio.tv.livetv.home.LiveTvHomeFocus.menuOpened()
         else if (currentRoute == Screen.Home.route) com.nuvio.tv.livetv.home.LiveTvHomeFocus.menuClosed()
+        onSidebarExpandedChange(isSidebarExpanded)
+    }
+
+    // Live TV fork: Back in the Live TV list returns to the main menu.
+    val liveTvListShowing = drawerItems.any { it.isGroup && it.groupOpen }
+    BackHandler(enabled = currentRoute in rootRoutes && isSidebarExpanded && !sidebarCollapsePending && liveTvListShowing) {
+        if (longPressBackHeld.value) return@BackHandler
+        onToggleLiveTvGroup()
+    }
+    // Live TV fork: opening the Live TV list puts the highlight on its first page (or the one
+    // you're on).
+    var pendingLiveTvListFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(drawerItems, pendingLiveTvListFocus) {
+        if (!pendingLiveTvListFocus) return@LaunchedEffect
+        val pages = drawerItems.filter { it.isChild }
+        if (pages.isEmpty()) return@LaunchedEffect
+        val target = pages.firstOrNull { it.route == selectedDrawerRoute } ?: pages.first()
+        repeat(2) { withFrameNanos { } }
+        runCatching { drawerItemFocusRequesters[target.route]?.requestFocus() }
+        pendingLiveTvListFocus = false
     }
 
     LaunchedEffect(isSidebarExpanded, sidebarCollapsePending, pendingContentFocusTransfer, showSidebar) {
@@ -2391,8 +2439,9 @@ private fun ModernSidebarScaffold(
                         drawerItemFocusRequesters = drawerItemFocusRequesters,
                         onDrawerItemFocused = { focusedDrawerIndex = it },
                         onDrawerItemClick = click@{ targetRoute ->
-                            // Live TV fork: the Live TV heading opens/closes its group.
+                            // Live TV fork: Live TV opens its list; its "‹ Live TV" row goes back.
                             if (targetRoute == LIVE_TV_GROUP_ROUTE) {
+                                if (drawerItems.none { it.isGroup && it.groupOpen }) pendingLiveTvListFocus = true
                                 onToggleLiveTvGroup()
                                 return@click
                             }

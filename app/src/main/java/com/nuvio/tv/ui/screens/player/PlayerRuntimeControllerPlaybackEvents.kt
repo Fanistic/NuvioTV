@@ -256,16 +256,23 @@ internal fun PlayerRuntimeController.startProgressUpdates() {
                         hasFatalError = !_uiState.value.error.isNullOrBlank(),
                         durationMs = effectiveDuration
                     )
+                    // Live TV fork: a recording that has played to its end finishes (and returns to
+                    // Recordings) whatever its length; the check above skips anything under about
+                    // two minutes as a placeholder clip.
+                    val recordingEnded = !naturalEnded &&
+                        com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType) &&
+                        !view.isLiveStreamNow() && mpvEofReached && firstFrameReady &&
+                        _uiState.value.error.isNullOrBlank()
                     val wasEnded = _uiState.value.playbackEnded
                     _uiState.update { state ->
                         state.copy(
                             isPlaying = playingNow,
-                            isBuffering = if (naturalEnded) false else (!firstFrameReady || cacheBuffering),
+                            isBuffering = if (naturalEnded || recordingEnded) false else (!firstFrameReady || cacheBuffering),
                             showLoadingOverlay = if (state.loadingOverlayEnabled) !firstFrameReady else false,
                             // Snap the loading-logo fill to 100% once playback is
                             // ready so the logo finishes filling on dismissal.
                             loadingProgress = if (firstFrameReady && state.loadingProgress != null) 1f else state.loadingProgress,
-                            playbackEnded = naturalEnded
+                            playbackEnded = naturalEnded || recordingEnded
                         )
                     }
                     updateMpvAvailableTracks()
@@ -300,6 +307,17 @@ internal fun PlayerRuntimeController.startProgressUpdates() {
                     playerReportsLive = player.isCurrentMediaItemLive,
                     isPlaying = player.isPlaying
                 )
+                // Live TV fork: a recording that has played to its end finishes (and returns to
+                // Recordings) whatever its length; Nuvio's own end check skips anything under
+                // about two minutes as a placeholder clip.
+                if (com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType) &&
+                    player.playbackState == Player.STATE_ENDED &&
+                    !player.isCurrentMediaItemLive &&
+                    !_uiState.value.playbackEnded &&
+                    _uiState.value.error.isNullOrBlank()
+                ) {
+                    _uiState.update { it.copy(playbackEnded = true, isBuffering = false) }
+                }
                 playbackAnalyticsDiagnostics.recordProgressSnapshot(
                     player = player,
                     hasRenderedFirstFrame = hasRenderedFirstFrame,
@@ -376,6 +394,21 @@ internal fun PlayerRuntimeController.startProgressUpdates() {
 internal fun PlayerRuntimeController.stopProgressUpdates() {
     progressJob?.cancel()
     progressJob = null
+    // Live TV fork: a recording that has played to its end finishes (and returns to Recordings)
+    // whatever its length. Nuvio's own end check skips anything under about two minutes as a
+    // placeholder clip, and the progress check above stops at the end, so it's caught here,
+    // where the player stops it.
+    val player = _exoPlayer
+    if (player != null &&
+        !isUsingMpvEngine() &&
+        com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType) &&
+        player.playbackState == Player.STATE_ENDED &&
+        !player.isCurrentMediaItemLive &&
+        !_uiState.value.playbackEnded &&
+        _uiState.value.error.isNullOrBlank()
+    ) {
+        _uiState.update { it.copy(playbackEnded = true, isBuffering = false) }
+    }
 }
 
 internal fun PlayerRuntimeController.startWatchProgressSaving() {

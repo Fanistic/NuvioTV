@@ -954,6 +954,11 @@ private fun PlaybackNavHost(
             PlayerScreen(
                 onBackPress = { currentVideoId, currentSeason, currentEpisode, autoPlayEnabled, playbackCompleted ->
                     val args = backStackEntry.arguments
+                    // Live TV fork: a recording goes back to Recordings (it has no details page).
+                    if (com.nuvio.tv.livetv.record.RecordingResume.isRecording(args?.getString("contentType"))) {
+                        navController.popBackStack()
+                        return@PlayerScreen
+                    }
                     val initialSeason = args?.getString("season")?.toIntOrNull()
                     val initialEpisode = args?.getString("episode")?.toIntOrNull()
                     val episodeChangedInPlace = (currentSeason != null || currentEpisode != null) &&
@@ -1053,6 +1058,11 @@ private fun PlaybackNavHost(
                 },
                 onPlaybackEnded = { nextVideoId, nextSeason, nextEpisode, exitReason ->
                     val args = backStackEntry.arguments
+                    // Live TV fork: a recording that finishes goes back to Recordings.
+                    if (com.nuvio.tv.livetv.record.RecordingResume.isRecording(args?.getString("contentType"))) {
+                        navController.popBackStack()
+                        return@PlayerScreen
+                    }
                     val contentType = args?.getString("contentType").orEmpty()
                     val contentId = args?.getString("contentId").orEmpty()
                     val returnToDetailOnBack = args?.getString("returnToDetailOnBack")
