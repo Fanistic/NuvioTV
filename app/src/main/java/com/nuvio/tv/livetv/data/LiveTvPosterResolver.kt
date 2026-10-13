@@ -91,6 +91,41 @@ class LiveTvPosterResolver @Inject constructor(
         } }
     }
 
+    private val titleHits = boundedCache<String, Hit>(500)
+
+    /**
+     * Recordings: the title in your addons' catalogs that a recorded show's name matches (movie
+     * or series), so its artwork (backdrop and logo) can be shown. Null if there's no good match.
+     */
+    suspend fun titleFor(name: String): Hit? {
+        if (LiveTvRepository.isPlaceholderTitle(name) || isGenericName(name)) return null
+        val query = LiveTvSearchBridge.cleanTitle(name).ifBlank { name.trim() }
+        if (query.length < 2) return null
+        val key = normalize(query)
+        titleHits[key]?.let { return it }
+        val clues = LiveTvSearchBridge.yearInTitle(name)?.let { Clues(year = it) } ?: Clues()
+        val hit = withContext(Urgency(false)) {
+            permits.withPermit {
+                val attempt = Attempt()
+                val queries = listOf(query) + showNameCandidates(name, null).filter { normalize(it) != key }.take(1)
+                var found: Hit? = null
+                for (q in queries) {
+                    found = try {
+                        lookup(q, null, if (q == query) clues else Clues(), attempt)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (found != null) break
+                }
+                found
+            }
+        }
+        if (hit != null) titleHits[key] = hit
+        return hit
+    }
+
     /**
      * "Test poster lookup" in settings: what the lookup sees for [title], in plain words, to
      * track down why a poster isn't showing.

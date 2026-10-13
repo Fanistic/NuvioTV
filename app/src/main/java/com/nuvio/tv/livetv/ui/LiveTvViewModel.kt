@@ -620,6 +620,10 @@ class LiveTvViewModel @Inject constructor(
     // ------------------------------------------------------------ per-channel EPG
 
     val epgSources: StateFlow<List<com.nuvio.tv.livetv.model.EpgSourceChannels>> = repository.epgSources
+    /** Assign EPG's channel lists are being read (only when they weren't saved). */
+    val epgListsLoading: StateFlow<Boolean> = repository.epgListsLoading
+    /** Assign EPG opened: makes sure it has the guides' channel lists. */
+    fun ensureEpgLists() = repository.ensureSourceLists()
 
     // ------------------------------------------------------------ home screen row
 

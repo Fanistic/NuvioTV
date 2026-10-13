@@ -277,6 +277,7 @@ fun LiveTvGuideScreen(
     LaunchedEffect(epgPickerFor) { if (epgPickerFor != null) viewModel.ensureEpgDetails() }
     var epgPanelFocusTick by remember { mutableIntStateOf(0) }
     val epgSources by viewModel.epgSources.collectAsStateWithLifecycle()
+    val epgListsLoading by viewModel.epgListsLoading.collectAsStateWithLifecycle()
     val epgAutoMatches by viewModel.epgAutoMatches.collectAsStateWithLifecycle()
     val menuStyle by viewModel.menuStyle.collectAsStateWithLifecycle()
     val panelHaze = remember { dev.chrisbanes.haze.HazeState() }
@@ -1431,6 +1432,8 @@ fun LiveTvGuideScreen(
                 Unit
             }
             BackHandler { closePanel() }
+            // The guides' channel lists, if they weren't saved from last time.
+            LaunchedEffect(Unit) { viewModel.ensureEpgLists() }
             // Moving through the channels with the panel open: the panel follows.
             val fc = focusedChannel
             LaunchedEffect(fc?.key, gridFocused) {
@@ -1441,8 +1444,9 @@ fun LiveTvGuideScreen(
                 sources = epgSources,
                 current = user.epgOverrides[ch.key],
                 automatic = epgAutoMatches[ch.key],
-                loading = status.loading,
-                statusMessage = status.message.takeIf { status.loading },
+                loading = status.loading || epgListsLoading,
+                statusMessage = status.message.takeIf { status.loading }
+                    ?: "Reading the guides' channel lists…".takeIf { epgListsLoading },
                 unassignedOnly = epgUnassignedOnly,
                 onToggleUnassigned = { epgUnassignedOnly = !epgUnassignedOnly },
                 onFullScan = { viewModel.fullEpgScan() },

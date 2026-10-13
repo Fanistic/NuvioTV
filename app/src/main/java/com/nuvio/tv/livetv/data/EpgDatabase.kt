@@ -101,7 +101,13 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
      * Replaces just these channels' listings (Assign EPG: unassigned or given another guide
      * channel), drops their automatic matches, and stores the new fingerprint, in one go.
      */
-    fun replaceChannels(fingerprint: String, channels: Set<String>, programs: Map<String, List<EpgProgram>>) {
+    fun replaceChannels(
+        fingerprint: String,
+        channels: Set<String>,
+        programs: Map<String, List<EpgProgram>>,
+        /** Automatic matches found for these channels (kept for next time). */
+        auto: Map<String, EpgAssignment> = emptyMap()
+    ) {
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -127,6 +133,11 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
                     if (p.people.isEmpty()) stmt.bindNull(10) else stmt.bindString(10, p.people.joinToString("\u001F"))
                     stmt.executeInsert()
                 }
+            }
+            auto.forEach { (ch, a) ->
+                db.insertWithOnConflict("auto", null, ContentValues().apply {
+                    put("ch", ch); put("source", a.sourceId); put("xmltv", a.xmltvId)
+                }, SQLiteDatabase.CONFLICT_REPLACE)
             }
             db.insertWithOnConflict("meta", null, ContentValues().apply { put("k", "fingerprint"); put("v", fingerprint) },
                 SQLiteDatabase.CONFLICT_REPLACE)

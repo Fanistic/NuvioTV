@@ -67,11 +67,16 @@ import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
 
+/** A recording's artwork: the show's backdrop, and its title logo to put over it. */
+data class RecordingArt(val backdrop: String?, val logo: String?)
+
 @HiltViewModel
 class RecordingsViewModel @Inject constructor(
     val recorder: LiveTvRecorder,
     val scheduler: LiveTvRecordingScheduler,
-    private val posterResolver: com.nuvio.tv.livetv.data.LiveTvPosterResolver
+    private val posterResolver: com.nuvio.tv.livetv.data.LiveTvPosterResolver,
+    private val tmdbService: com.nuvio.tv.core.tmdb.TmdbService,
+    private val tmdbMetadataService: com.nuvio.tv.core.tmdb.TmdbMetadataService
 ) : ViewModel() {
     val recordings = recorder.recordings
     val schedules = scheduler.schedules
@@ -93,11 +98,61 @@ class RecordingsViewModel @Inject constructor(
         }
     }
 
+    // ---- Artwork: the show's backdrop with its logo over it, like Nuvio's landscape cards.
+    private val _art = MutableStateFlow<Map<String, RecordingArt>>(emptyMap())
+    /** Recording id -> backdrop and logo (from TMDB, else your addons). */
+    val art: StateFlow<Map<String, RecordingArt>> = _art.asStateFlow()
+    private val triedArt = HashSet<String>()
+    private val artPrefs = recorder.appContext.getSharedPreferences("livetv_recording_art", android.content.Context.MODE_PRIVATE)
+
+    fun loadArt(list: List<LiveTvRecording>) {
+        val todo = list.filter { triedArt.add(it.id) }
+        if (todo.isEmpty()) return
+        // Found before: straight away, no lookup.
+        val saved = HashMap<String, RecordingArt>()
+        todo.forEach { r ->
+            runCatching { artPrefs.getString(r.id, null) }.getOrNull()?.let { v ->
+                val parts = v.split('\n')
+                saved[r.id] = RecordingArt(parts.getOrNull(0)?.ifBlank { null }, parts.getOrNull(1)?.ifBlank { null })
+            }
+        }
+        if (saved.isNotEmpty()) _art.value = _art.value + saved
+        viewModelScope.launch {
+            for (r in todo) {
+                if (r.id in saved) continue
+                val found = runCatching { findArt(r.title) }.getOrNull() ?: continue
+                _art.value = _art.value + (r.id to found)
+                runCatching { artPrefs.edit().putString(r.id, (found.backdrop ?: "") + "\n" + (found.logo ?: "")).apply() }
+            }
+        }
+    }
+
+    /** The show in your addons' catalogs, then its TMDB backdrop and logo (the addon's own if TMDB has none). */
+    private suspend fun findArt(title: String): RecordingArt? {
+        val hit = posterResolver.titleFor(title) ?: return null
+        val movie = hit.type.equals("movie", ignoreCase = true)
+        val tmdb = runCatching {
+            tmdbService.ensureTmdbId(hit.meta.id, if (movie) "movie" else "series")?.let { id ->
+                tmdbMetadataService.fetchEnrichment(
+                    tmdbId = id,
+                    contentType = if (movie) com.nuvio.tv.domain.model.ContentType.MOVIE else com.nuvio.tv.domain.model.ContentType.SERIES
+                )
+            }
+        }.getOrNull()
+        val backdrop = tmdb?.backdrop ?: hit.meta.background ?: hit.meta.landscapePoster
+        val logo = tmdb?.logo ?: hit.meta.logo
+        if (backdrop == null) return null
+        return RecordingArt(backdrop, logo)
+    }
+
     fun playUrl(rec: LiveTvRecording): String = recorder.playUrl(rec)
     /** Where you left off (ms), if partly watched. */
     fun resume(rec: LiveTvRecording): Long? = RecordingResume.load(recorder.appContext, RecordingResume.contentIdFor(rec.id))?.first
     fun stop(rec: LiveTvRecording) = recorder.stop(rec.id)
-    fun delete(rec: LiveTvRecording) = recorder.delete(rec.id)
+    fun delete(rec: LiveTvRecording) {
+        recorder.delete(rec.id)
+        runCatching { artPrefs.edit().remove(rec.id).apply() }
+    }
     fun freeBytes(): Long = recorder.freeBytes()
 }
 
@@ -116,6 +171,7 @@ fun RecordingsScreen(
     val schedules by viewModel.schedules.collectAsStateWithLifecycle()
     val seriesRules by viewModel.series.collectAsStateWithLifecycle()
     val posters by viewModel.posters.collectAsStateWithLifecycle()
+    val art by viewModel.art.collectAsStateWithLifecycle()
     var scheduleMenu by remember { mutableStateOf<RecordingSchedule?>(null) }
     // Back from the player: read where you got to again (the progress bars).
     var resumeTick by remember { mutableStateOf(0) }
@@ -131,7 +187,7 @@ fun RecordingsScreen(
         while (true) { kotlinx.coroutines.delay(5_000); nowMs = System.currentTimeMillis() }
     }
     var seriesMenu by remember { mutableStateOf<SeriesRule?>(null) }
-    LaunchedEffect(recordings) { viewModel.loadPosters(recordings) }
+    LaunchedEffect(recordings) { viewModel.loadPosters(recordings); viewModel.loadArt(recordings) }
     var menuFor by remember { mutableStateOf<LiveTvRecording?>(null) }
     var confirmDelete by remember { mutableStateOf<LiveTvRecording?>(null) }
     val first = remember { FocusRequester() }
@@ -194,8 +250,7 @@ fun RecordingsScreen(
                     now.take(2).forEach { rec ->
                         RecordingNowCard(
                             rec = rec,
-                            image = posters[rec.id] ?: rec.channelLogo,
-                            isPoster = posters[rec.id] != null,
+                            art = art[rec.id],
                             nowMs = nowMs,
                             watchModifier = if (rec.id == firstNowId) Modifier.focusRequester(first) else Modifier,
                             onWatch = { playNow(rec) },
@@ -263,8 +318,7 @@ fun RecordingsScreen(
                         gridItems(done, key = { it.id }) { rec ->
                             RecordedCard(
                                 rec = rec,
-                                image = posters[rec.id] ?: rec.channelLogo,
-                                isPoster = posters[rec.id] != null,
+                                art = art[rec.id],
                                 resumeFraction = resumeTick.let { viewModel.resume(rec) }?.let { ms ->
                                     if (rec.durationSec > 0) (ms / 1000.0 / rec.durationSec).toFloat().coerceIn(0f, 1f) else null
                                 },
@@ -360,23 +414,91 @@ private fun cardColors(focused: Boolean): Pair<Color, Color> {
         (if (focused) colors.FocusRing else Color.Transparent)
 }
 
-/** Show art (a poster, cropped) or the channel's logo (whole, on the tile color). */
+/**
+ * A recording's picture, like Nuvio's landscape cards: the show's backdrop with its title logo
+ * over the bottom (or the title in text when there's no logo). With no backdrop found, the
+ * channel's logo on the tile color, with the title under it.
+ */
 @Composable
-private fun Thumb(image: String?, isPoster: Boolean, modifier: Modifier, content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {}) {
+private fun ArtThumb(
+    art: RecordingArt?,
+    channelLogo: String?,
+    title: String,
+    modifier: Modifier,
+    /** Smaller title and logo (the Recording Now card). */
+    compact: Boolean = false,
+    content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit = {}
+) {
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(liveCorner()))
-            .background(NuvioTheme.colors.BackgroundCard),
-        contentAlignment = Alignment.Center
+            .background(NuvioTheme.colors.BackgroundCard)
     ) {
-        if (image != null) {
+        if (art?.backdrop != null) {
             AsyncImage(
-                model = image,
+                model = art.backdrop,
                 contentDescription = null,
-                contentScale = if (isPoster) ContentScale.Crop else ContentScale.Fit,
-                alignment = if (isPoster) Alignment.TopCenter else Alignment.Center,
-                modifier = Modifier.fillMaxSize().padding(if (isPoster) 0.dp else 14.dp)
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
             )
+            // Darker toward the bottom, so the logo and the progress bar stand out.
+            Box(
+                Modifier.fillMaxSize().background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        0f to Color.Transparent,
+                        0.45f to Color.Transparent,
+                        1f to Color.Black.copy(alpha = 0.8f)
+                    )
+                )
+            )
+            if (art.logo != null) {
+                AsyncImage(
+                    model = art.logo,
+                    contentDescription = title,
+                    contentScale = ContentScale.Fit,
+                    alignment = Alignment.BottomStart,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 12.dp, end = 12.dp, bottom = if (compact) 10.dp else 16.dp)
+                        .fillMaxWidth(if (compact) 0.75f else 0.6f)
+                        .fillMaxHeight(0.36f)
+                )
+            } else {
+                LiveText(
+                    title,
+                    size = if (compact) 13.sp else 17.sp,
+                    weight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 2,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 12.dp, end = 12.dp, bottom = if (compact) 10.dp else 16.dp)
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier.fillMaxSize().padding(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                if (channelLogo != null) {
+                    AsyncImage(
+                        model = channelLogo,
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxWidth(0.5f).height(if (compact) 36.dp else 52.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                LiveText(
+                    title,
+                    size = if (compact) 13.sp else 15.sp,
+                    weight = FontWeight.SemiBold,
+                    color = NuvioTheme.colors.TextSecondary,
+                    maxLines = 2,
+                    align = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
         }
         content()
     }
@@ -405,8 +527,7 @@ private fun ProgressLine(fraction: Float, color: Color, modifier: Modifier) {
 @Composable
 private fun RecordingNowCard(
     rec: LiveTvRecording,
-    image: String?,
-    isPoster: Boolean,
+    art: RecordingArt?,
     nowMs: Long,
     watchModifier: Modifier,
     onWatch: () -> Unit,
@@ -432,7 +553,7 @@ private fun RecordingNowCard(
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Thumb(image, isPoster, Modifier.width(156.dp).fillMaxHeight())
+        ArtThumb(art, rec.channelLogo, rec.title, Modifier.width(156.dp).fillMaxHeight(), compact = true)
         Spacer(Modifier.width(18.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -538,8 +659,7 @@ private fun InfoCard(
 @Composable
 private fun RecordedCard(
     rec: LiveTvRecording,
-    image: String?,
-    isPoster: Boolean,
+    art: RecordingArt?,
     resumeFraction: Float?,
     modifier: Modifier,
     onClick: () -> Unit,
@@ -564,8 +684,8 @@ private fun RecordedCard(
             ),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Thumb(
-            image, isPoster,
+        ArtThumb(
+            art, rec.channelLogo, rec.title,
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(16f / 9f)

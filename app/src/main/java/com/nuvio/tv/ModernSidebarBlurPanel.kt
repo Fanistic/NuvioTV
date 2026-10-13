@@ -388,13 +388,12 @@ private fun SidebarNavigationItem(
         }
         Spacer(modifier = Modifier.width(SidebarContentGap))
 
-        // Live TV fork: every label the same size (a long one ends in "…" rather than shrinking,
-        // which left the menu's labels in all different sizes).
-        Text(
+        // Live TV fork: every label the same size, small enough for all of them to fit (see
+        // SidebarLabel).
+        SidebarLabel(
             text = label,
             color = contentColor,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            key = label + if (trailingIcon != null) "|arrow" else "",
             modifier = Modifier
                 .weight(1f)
                 .graphicsLayer { alpha = labelAlpha }

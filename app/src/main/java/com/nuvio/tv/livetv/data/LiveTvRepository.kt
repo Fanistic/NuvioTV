@@ -278,6 +278,138 @@ class LiveTvRepository @Inject constructor(
         out
     }.getOrDefault(emptyMap())
 
+    // ---- The guides' channel lists (Assign EPG), kept between app starts.
+    private val sourceListsFile get() = File(baseDir, "epg_channel_lists.bin")
+
+    /** Which guide files the saved lists came from (each file's size and contents stamp). */
+    private fun sourceListsStamp(targets: List<EpgTarget>): String = targets.joinToString(",") { t ->
+        val f = epgFile(t.fileId)
+        t.fileId + ":" + f.length() + ":" + contentStamp(f)
+    }
+
+    private fun saveSourceLists(targets: List<EpgTarget>, lists: List<EpgSourceChannels>) {
+        runCatching {
+            val tmp = File(baseDir, sourceListsFile.name + ".tmp")
+            java.io.DataOutputStream(java.io.BufferedOutputStream(java.util.zip.GZIPOutputStream(tmp.outputStream()))).use { out ->
+                out.writeInt(SOURCE_LISTS_VERSION)
+                out.writeUTF(sourceListsStamp(targets))
+                out.writeInt(lists.size)
+                lists.forEach { l ->
+                    out.writeUTF(l.sourceId); out.writeUTF(l.name); out.writeUTF(l.label)
+                    out.writeInt(l.channels.size)
+                    l.channels.forEach { e ->
+                        out.writeUTF(e.id)
+                        out.writeInt(e.names.size)
+                        e.names.forEach { out.writeUTF(it.take(500)) }
+                        out.writeUTF(e.icon.orEmpty().take(2000))
+                    }
+                }
+            }
+            if (!tmp.renameTo(sourceListsFile)) { tmp.copyTo(sourceListsFile, overwrite = true); tmp.delete() }
+        }.onFailure { Log.w(TAG, "Couldn't save the guides' channel lists", it) }
+    }
+
+    /** Loads the saved lists if they still match the guide files; marks what's in use. */
+    private suspend fun loadSourceLists(targets: List<EpgTarget>) {
+        val f = sourceListsFile
+        if (!f.exists()) {
+            LIVE_REPORT.add("Assign EPG lists: none saved yet (read when Assign EPG is first opened)")
+            return
+        }
+        val lists = runCatching {
+            java.io.DataInputStream(java.io.BufferedInputStream(java.util.zip.GZIPInputStream(f.inputStream()))).use { input ->
+                if (input.readInt() != SOURCE_LISTS_VERSION) return@use null
+                if (input.readUTF() != sourceListsStamp(targets)) return@use null
+                val n = input.readInt()
+                (0 until n).map {
+                    val sourceId = input.readUTF(); val name = input.readUTF(); val label = input.readUTF()
+                    val count = input.readInt()
+                    val entries = ArrayList<EpgChannelEntry>(count)
+                    repeat(count) {
+                        val id = input.readUTF()
+                        val names = (0 until input.readInt()).map { input.readUTF() }
+                        val icon = input.readUTF().ifBlank { null }
+                        entries += EpgChannelEntry(id, names, icon)
+                    }
+                    EpgSourceChannels(sourceId, name, label, entries)
+                }
+            }
+        }.onFailure { Log.w(TAG, "Couldn't read the guides' channel lists", it) }.getOrNull()
+        if (lists == null) {
+            LIVE_REPORT.add("Assign EPG lists: saved copy out of date (read when Assign EPG is first opened)")
+            return
+        }
+        // Which guide channels already feed a playlist channel (matched or assigned).
+        val overrides = prefs.userState.first().epgOverrides
+        val used = HashMap<String, MutableSet<String>>()
+        (_autoMatches.value.values + overrides.values).forEach { used.getOrPut(it.sourceId) { HashSet() } += it.xmltvId }
+        // Only if nothing filled them in the meantime (a guide update in progress wins).
+        if (_epgSources.value.isEmpty()) {
+            _epgSources.value = lists.map { it.copy(usedIds = used[it.sourceId].orEmpty()) }
+            LIVE_REPORT.add("Assign EPG lists: ${lists.size} guide(s) ready from last time")
+        }
+    }
+
+    /** Stops reading a guide once its channel list has been read (the programmes aren't needed). */
+    private class ChannelListRead(val channels: Map<String, XmltvChannel>) : RuntimeException()
+
+    private val _epgListsLoading = MutableStateFlow(false)
+    /** Assign EPG's channel lists are being read (see [ensureSourceLists]). */
+    val epgListsLoading: StateFlow<Boolean> = _epgListsLoading.asStateFlow()
+
+    /**
+     * Assign EPG opened with no channel lists (no saved copy yet, e.g. the first time after
+     * updating, or the guides changed without being read since): reads just each guide's
+     * channel list, the short part at the top of the file. No programmes, and nothing at
+     * start-up: only when Assign EPG actually needs them.
+     */
+    fun ensureSourceLists() {
+        if (_epgSources.value.isNotEmpty() || _epgListsLoading.value) return
+        _epgListsLoading.value = true
+        scope.launch(Dispatchers.IO) {
+            try {
+                readSourceLists(collectEpgTargets())
+            } finally {
+                _epgListsLoading.value = false
+            }
+        }
+    }
+
+    private suspend fun readSourceLists(targets: List<EpgTarget>) {
+        if (_epgSources.value.isNotEmpty()) return
+        val lists = ArrayList<EpgSourceChannels>()
+        for (t in targets) {
+            val file = epgFile(t.fileId)
+            if (!file.exists()) continue
+            val channels: Map<String, XmltvChannel> = try {
+                openMaybeGzip(file).use { input ->
+                    XmltvParser.parse(input, 0L, 0L) { xc -> throw ChannelListRead(LinkedHashMap(xc)) }
+                }
+                emptyMap()
+            } catch (e: ChannelListRead) {
+                e.channels
+            } catch (e: Exception) {
+                Log.w(TAG, "Couldn't read the channel list of ${t.name}", e)
+                emptyMap()
+            }
+            val label = runCatching { java.net.URI(t.url).host?.removePrefix("www.") }.getOrNull()
+                ?.takeIf { it.isNotBlank() } ?: t.name
+            lists += EpgSourceChannels(
+                t.fileId, t.name, label,
+                channels.values.map { EpgChannelEntry(it.id, it.displayNames, it.icon) }.sortedBy { it.displayName.lowercase() }
+            )
+        }
+        if (lists.isEmpty()) return
+        val overrides = prefs.userState.first().epgOverrides
+        val used = HashMap<String, MutableSet<String>>()
+        (_autoMatches.value.values + overrides.values).forEach { used.getOrPut(it.sourceId) { HashSet() } += it.xmltvId }
+        if (_epgSources.value.isEmpty()) {
+            _epgSources.value = lists.map { it.copy(usedIds = used[it.sourceId].orEmpty()) }
+            saveSourceLists(targets, lists)
+            LIVE_REPORT.add("Assign EPG lists: ${lists.size} guide(s) read for Assign EPG")
+        }
+    }
+
     private fun saveEpgLogos(map: Map<String, String>) {
         runCatching {
             val o = org.json.JSONObject()
@@ -654,6 +786,9 @@ class LiveTvRepository @Inject constructor(
         guideInDb = true
         lightPrograms = true
         epgDetailsPending = true
+        // The guides' channel lists (for Assign EPG), saved last time the guides were read, so
+        // they're ready without a Full Scan.
+        if (_epgSources.value.isEmpty()) scope.launch(Dispatchers.IO) { loadSourceLists(targets) }
         LIVE_REPORT.add("First channels' listings ready: ${_programs.value.size} channels")
         // Everything else (short form, the usual hours), in the background, in one read.
         rangeBusy.set(true)
@@ -1166,6 +1301,7 @@ class LiveTvRepository @Inject constructor(
         }
         _autoMatches.value = auto
         _epgSources.value = sourceLists
+        saveSourceLists(targets, sourceLists)
         // Each channel's logo in the guide it's matched to (or assigned), for playlists that
         // prefer the guide's logos, and for channels whose playlist has none.
         val iconsBySource = sourceMeta.associate { (target, _, entries) ->
@@ -1235,25 +1371,26 @@ class LiveTvRepository @Inject constructor(
     private fun isPlaceholder(title: String): Boolean =
         PLACEHOLDER_TITLES.matches(title.trim().lowercase())
 
-    /** Re-reads the cached guides, e.g. after an EPG assignment changed. No downloads. */
     /**
      * Assign EPG changes applied straight to the stored guide instead of reading every guide
      * file again (which took as long as a full guide update, just to change one channel):
      *  - Unassign: the channel's listings are simply dropped. Nothing is read.
      *  - A guide channel picked by hand: only that one guide file is read, for just that channel.
-     *  - Back to automatic: the best match has to be found across every guide, so that one
-     *    still does the full re-match.
+     *  - Back to automatic: the guides' channel lists (already in memory, the ones Assign EPG
+     *    shows) say which guide channels could match; only the guides that have one are read,
+     *    for just those channels, and the best is picked the same way a full update picks.
+     * Only if those lists aren't loaded yet does it fall back to reading every guide.
      * [changes]: channel key -> its new assignment (null = back to automatic).
      */
     fun applyEpgChanges(changes: Map<String, EpgAssignment?>) {
         if (changes.isEmpty()) return
         scope.launch {
             mutex.withLock {
-                val quick = guideInDb && changes.values.none { it == null } &&
-                    runCatching { applyEpgChangesQuick(changes) }
-                        .onFailure { Log.w(TAG, "Quick EPG change failed; full re-match", it) }
-                        .getOrDefault(false)
+                val quick = runCatching { applyEpgChangesQuick(changes) }
+                    .onFailure { Log.w(TAG, "Quick EPG change failed; full re-match", it) }
+                    .getOrDefault(false)
                 if (!quick) {
+                    LIVE_REPORT.add("Assign EPG: guide channel lists not ready, so every guide was read")
                     setStatus(loading = true, message = "Updating guide…")
                     buildPrograms(prefs.currentSettings(), collectEpgTargets())
                 }
@@ -1269,44 +1406,97 @@ class LiveTvRepository @Inject constructor(
         val windowStart = now - settings.epgPastHours.coerceAtLeast(1) * HOUR
         val windowEnd = now + settings.epgFutureDays.coerceAtLeast(1) * 24 * HOUR
         val assigned = changes.filterValues { it != null && !it.isNone }.mapValues { it.value!! }
-        val newPrograms = HashMap<String, List<EpgProgram>>()
-        val newIcons = HashMap<String, String>()
-        for ((sourceId, group) in assigned.entries.groupBy { it.value.sourceId }) {
-            val target = targets.firstOrNull { it.fileId == sourceId } ?: return@withContext false
+
+        // Back to automatic: possible matches, from the guides' channel lists.
+        data class Cand(val order: Int, val sourceId: String, val xmltvId: String, val idMatch: Boolean)
+        val autoBack = changes.filterValues { it == null }.keys
+        val cands = HashMap<String, MutableList<Cand>>()
+        if (autoBack.isNotEmpty()) {
+            val lists = _epgSources.value
+            if (lists.isEmpty()) return@withContext false
+            val chans = _channels.value.filter { it.key in autoBack }
+            targets.forEachIndexed { order, t ->
+                val list = lists.firstOrNull { it.sourceId == t.fileId } ?: return@forEachIndexed
+                chans.forEach { c ->
+                    val tvg = c.tvgId?.lowercase()?.takeIf { it.isNotBlank() }
+                    val names = listOfNotNull(c.tvgName, c.name).map { normalize(it) }.filter { it.isNotEmpty() }.toSet()
+                    list.channels.forEach { e ->
+                        val idMatch = tvg != null && e.id.lowercase() == tvg
+                        val nameMatch = !idMatch && names.isNotEmpty() && (e.names + e.id).any { normalize(it) in names }
+                        if (idMatch || nameMatch) cands.getOrPut(c.key) { ArrayList() } += Cand(order, t.fileId, e.id, idMatch)
+                    }
+                }
+            }
+        }
+
+        // Each guide file read once, for just the channels needed from it.
+        val wantedBySource = HashMap<String, MutableSet<String>>()
+        assigned.values.forEach { wantedBySource.getOrPut(it.sourceId) { HashSet() } += it.xmltvId }
+        cands.values.flatten().forEach { wantedBySource.getOrPut(it.sourceId) { HashSet() } += it.xmltvId }
+        val programsBySource = HashMap<String, Map<String, List<EpgProgram>>>()
+        val iconsBySource = HashMap<String, Map<String, String>>()
+        for ((sourceId, wanted) in wantedBySource) {
+            val target = targets.firstOrNull { it.fileId == sourceId } ?: continue
             val file = epgFile(target.fileId)
-            if (!file.exists()) return@withContext false
-            val wanted = group.mapTo(HashSet()) { it.value.xmltvId }
+            if (!file.exists()) continue
             setStatus(loading = true, message = "Reading guide \"${target.name}\"…")
             val parsed = openMaybeGzip(file).use { input ->
                 XmltvParser.parse(input, windowStart, windowEnd) { wanted }
             }
-            group.forEach { (key, a) ->
-                newPrograms[key] = cleanListings(parsed.programs[a.xmltvId].orEmpty())
-                parsed.channels[a.xmltvId]?.icon?.takeIf { it.isNotBlank() }?.let { newIcons[key] = it }
+            programsBySource[sourceId] = parsed.programs
+            iconsBySource[sourceId] = parsed.channels.mapNotNull { (id, ch) -> ch.icon?.takeIf { it.isNotBlank() }?.let { id to it } }.toMap()
+        }
+
+        val newPrograms = HashMap<String, List<EpgProgram>>()
+        val newIcons = HashMap<String, String>()
+        assigned.forEach { (key, a) ->
+            newPrograms[key] = cleanListings(programsBySource[a.sourceId]?.get(a.xmltvId).orEmpty())
+            iconsBySource[a.sourceId]?.get(a.xmltvId)?.let { newIcons[key] = it }
+        }
+        // Automatic: the same choice a full update makes (real listings first, then a tvg-id
+        // match over a name match, then the guide higher in the list).
+        val newAuto = HashMap<String, EpgAssignment>()
+        cands.forEach { (key, list) ->
+            var bestScore = Int.MIN_VALUE
+            var best: Pair<Cand, List<EpgProgram>>? = null
+            list.forEach { c ->
+                val listings = cleanListings(programsBySource[c.sourceId]?.get(c.xmltvId).orEmpty())
+                if (listings.isEmpty()) return@forEach
+                val score = (if (!isPlaceholderListing(listings)) 4_000 else 0) + (if (c.idMatch) 2_000 else 0) - c.order
+                if (score > bestScore) { bestScore = score; best = c to listings }
+            }
+            best?.let { (c, listings) ->
+                newPrograms[key] = listings
+                newAuto[key] = EpgAssignment(c.sourceId, c.xmltvId)
+                iconsBySource[c.sourceId]?.get(c.xmltvId)?.let { newIcons[key] = it }
             }
         }
+
         val changed = changes.keys
-        // Stored guide first, then what's on screen.
-        guideDb.replaceChannels(guideFingerprint(settings, targets), changed, newPrograms)
+        // Stored guide first (when the guide is kept in the database), then what's on screen.
+        if (guideInDb) guideDb.replaceChannels(guideFingerprint(settings, targets), changed, newPrograms, newAuto)
         _programs.value = HashMap(_programs.value).apply {
             changed.forEach { remove(it) }
             newPrograms.forEach { (k, l) ->
-                val shown = l.filter { it.stopMs > loadedFrom && it.startMs < loadedTo }
+                val shown = if (guideInDb) l.filter { it.stopMs > loadedFrom && it.startMs < loadedTo } else l
                 if (shown.isNotEmpty()) put(k, shown)
             }
         }
-        _autoMatches.value = _autoMatches.value - changed
+        _autoMatches.value = (_autoMatches.value - changed) + newAuto
         val logos = HashMap(_epgLogos.value).apply { changed.forEach { remove(it) }; putAll(newIcons) }
         _epgLogos.value = logos
         saveEpgLogos(logos)
         // Keep the "already used" marks in Assign EPG up to date.
-        val used = assigned.values.groupBy({ it.sourceId }, { it.xmltvId })
+        val used = (assigned.values + newAuto.values).groupBy({ it.sourceId }, { it.xmltvId })
         if (used.isNotEmpty()) {
             _epgSources.value = _epgSources.value.map { s ->
                 used[s.sourceId]?.let { ids -> s.copy(usedIds = s.usedIds + ids) } ?: s
             }
         }
-        LIVE_REPORT.add("Assign EPG: ${changed.size} channel(s) updated without re-reading every guide")
+        LIVE_REPORT.add(
+            "Assign EPG: ${changed.size} channel(s) updated, " +
+                (if (programsBySource.isEmpty()) "no guide read" else "read ${programsBySource.size} of ${targets.size} guide(s)")
+        )
         true
     }
 
@@ -1672,6 +1862,8 @@ class LiveTvRepository @Inject constructor(
         private val qualityTokens = Regex("""\b(fhd|uhd|hd|sd|4k|8k|hevc|h265|h264|1080p|720p|backup|raw)\b""")
         private val prefixToken = Regex("""^[a-z]{2,3}\s*[:|]\s*""")
         private val bracketed = Regex("""\[.*?]|\(.*?\)""")
+
+        private const val SOURCE_LISTS_VERSION = 1
 
         internal fun normalize(name: String): String {
             var n = name.lowercase().trim()

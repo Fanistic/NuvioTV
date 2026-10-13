@@ -1995,14 +1995,13 @@ private fun LegacySidebarButton(
             )
         }
         if (expanded) {
-            // Live TV fork: every label the same size (a long one ends in "…" rather than
-            // shrinking, which left the menu's labels in all different sizes).
-            Text(
+            // Live TV fork: every label the same size, small enough for all of them to fit (see
+            // SidebarLabel).
+            SidebarLabel(
                 text = label,
                 color = contentColor,
                 textAlign = TextAlign.Start,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                key = label + if (trailingIcon != null) "|arrow" else "",
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = 54.dp, end = if (trailingIcon != null) 44.dp else 14.dp)
