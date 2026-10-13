@@ -152,6 +152,8 @@ class OnDemandRepository @Inject constructor(
             // a busy box made those lookups miss, leaving the home hero without year, genres
             // and description).
             kotlinx.coroutines.delay(START_DELAY_MS)
+            // Release years for titles imported before years were read from their names.
+            runCatching { db.fillMissingYears() }
             // Learn each provider's title tags (for catalogs imported before this existed).
             runCatching {
                 db.loadPrefixes()
@@ -396,7 +398,10 @@ class OnDemandRepository @Inject constructor(
                             categoryId = f["category_id"].orEmpty(),
                             ext = f["container_extension"]?.takeIf { it.isNotBlank() },
                             tmdbId = (f["tmdb"] ?: f["tmdb_id"])?.takeIf { it.isNotBlank() && it != "0" },
-                            year = yearOf(f["year"] ?: f["releaseDate"] ?: f["release_date"] ?: name),
+                            // The first of these that has a year: providers often send an empty
+                            // year field, which used to stop it trying the others (and the name).
+                            year = listOf(f["year"], f["releaseDate"], f["release_date"]).firstNotNullOfOrNull { yearOf(it) }
+                                ?: OnDemandDatabase.yearInTitle(name),
                             rating = f["rating"]?.takeIf { it.isNotBlank() && it != "0" },
                             addedSec = (f["added"] ?: f["last_modified"])?.toLongOrNull() ?: 0L,
                             genre = f["genre"]?.trim()?.takeIf { it.isNotBlank() }

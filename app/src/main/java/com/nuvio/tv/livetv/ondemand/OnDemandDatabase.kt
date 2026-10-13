@@ -150,6 +150,34 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
         }
     }
 
+    /**
+     * Titles with no release year, given the year in their name ("Movie (2019)", "Movie 2019").
+     * Many providers send an empty year field, and the year in the name was never tried after
+     * an empty one, so Newest and Oldest Release had nothing to sort by. Returns how many.
+     */
+    fun fillMissingYears(): Int {
+        val db = writableDatabase
+        val found = ArrayList<Pair<Long, Int>>()
+        db.rawQuery("SELECT rowid, name FROM items WHERE year IS NULL", null).use { c ->
+            while (c.moveToNext()) {
+                val y = yearInTitle(c.getString(1) ?: continue) ?: continue
+                found += c.getLong(0) to y
+            }
+        }
+        if (found.isEmpty()) return 0
+        db.beginTransaction()
+        try {
+            val stmt = db.compileStatement("UPDATE items SET year = ? WHERE rowid = ?")
+            found.forEach { (rowid, y) ->
+                stmt.clearBindings(); stmt.bindLong(1, y.toLong()); stmt.bindLong(2, rowid); stmt.executeUpdateDelete()
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return found.size
+    }
+
     private fun createPrefixTable(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS prefixes (pl TEXT NOT NULL, prefix TEXT NOT NULL, PRIMARY KEY (pl, prefix))")
     }
