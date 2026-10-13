@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -187,6 +189,7 @@ fun RecordingsScreen(
         while (true) { kotlinx.coroutines.delay(5_000); nowMs = System.currentTimeMillis() }
     }
     var seriesMenu by remember { mutableStateOf<SeriesRule?>(null) }
+    var seriesKeepMenu by remember { mutableStateOf<SeriesRule?>(null) }
     LaunchedEffect(recordings) { viewModel.loadPosters(recordings); viewModel.loadArt(recordings) }
     var menuFor by remember { mutableStateOf<LiveTvRecording?>(null) }
     var confirmDelete by remember { mutableStateOf<LiveTvRecording?>(null) }
@@ -350,18 +353,29 @@ fun RecordingsScreen(
             onDismiss = { scheduleMenu = null }
         )
     }
+    // A series: stop it, or choose how many episodes to keep (its own list, so Stop is never
+    // pushed off the bottom by the keep choices).
     seriesMenu?.let { r ->
         RecordingActionDialog(
             title = r.title,
             detail = "Every airing on " + r.channel.name + ". Stopping it also cancels the airings it set that haven't started; what's recorded is kept.",
-            actions = listOf(0, 1, 3, 5, 10).map { n ->
-                val label = (if (n == 0) "Keep All Episodes" else "Keep the Last $n") + if (r.keepLast == n) "  ✓" else ""
-                label to { seriesMenu = null; viewModel.scheduler.setKeep(r.id, n) }
-            } + listOf(
+            actions = listOf(
                 "Stop Recording Series" to { seriesMenu = null; viewModel.scheduler.removeSeries(r.id) },
+                ("Episodes to Keep: " + (if (r.keepLast == 0) "All" else "Last ${r.keepLast}")) to { seriesMenu = null; seriesKeepMenu = r },
                 "Close" to { seriesMenu = null }
             ),
             onDismiss = { seriesMenu = null }
+        )
+    }
+    seriesKeepMenu?.let { r ->
+        RecordingActionDialog(
+            title = "Episodes to Keep",
+            detail = r.title + ": older episodes are deleted as new ones are recorded.",
+            actions = listOf(0, 1, 3, 5, 10).map { n ->
+                val label = (if (n == 0) "Keep All Episodes" else "Keep the Last $n") + if (r.keepLast == n) "  ✓" else ""
+                label to { seriesKeepMenu = null; viewModel.scheduler.setKeep(r.id, n) }
+            },
+            onDismiss = { seriesKeepMenu = null }
         )
     }
 
@@ -727,7 +741,14 @@ private fun RecordingActionDialog(
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { kotlinx.coroutines.delay(80); runCatching { first.requestFocus() } }
     com.nuvio.tv.ui.components.NuvioDialog(onDismiss = onDismiss, title = title, subtitle = detail, width = 480.dp) {
-        Column(verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xxs)) {
+        // Scrolls when the choices don't all fit (the last ones used to sit off the bottom of
+        // the screen, out of reach).
+        Column(
+            modifier = Modifier
+                .heightIn(max = 340.dp)
+                .verticalScroll(androidx.compose.foundation.rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xxs)
+        ) {
             actions.forEachIndexed { i, (label, action) ->
                 com.nuvio.tv.ui.screens.settings.SettingsActionRow(
                     title = label,

@@ -99,7 +99,7 @@ data class VodCategory(
  */
 @Singleton
 class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context) :
-    SQLiteOpenHelper(context, "livetv_on_demand.db", null, 6) {
+    SQLiteOpenHelper(context, "livetv_on_demand.db", null, 7) {
 
     init {
         // Browsing On Demand doesn't wait while an import or genre lookup is writing.
@@ -148,6 +148,42 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
             runCatching { db.execSQL("ALTER TABLE posters ADD COLUMN title TEXT") }
             db.execSQL("DELETE FROM posters WHERE poster = ''")
         }
+        // Version 7: release years taken from a number in the title by mistake ("2038 Origin
+        // Unknown" came out as a 2038 release, "1917" as 1917) are worked out again.
+        if (oldVersion < 7) runCatching { fixYearsFromNames(db) }
+    }
+
+    private fun fixYearsFromNames(db: SQLiteDatabase) {
+        val firstAny = Regex("(19|20)\\d{2}")
+        val fixes = ArrayList<Pair<Long, Int?>>()
+        db.rawQuery("SELECT rowid, name, year FROM items WHERE year IS NOT NULL", null).use { c ->
+            while (c.moveToNext()) {
+                val name = c.getString(1) ?: continue
+                val year = c.getInt(2)
+                val fromNameBefore = setOfNotNull(
+                    firstAny.find(name)?.value?.toIntOrNull(),
+                    yearInTitle(name)
+                )
+                val proper = releaseYearInName(name)
+                // Only years that came from the title: a year the provider sent is left alone.
+                if (year in fromNameBefore && proper != year) fixes += c.getLong(0) to proper
+                else if (year > latestYear()) fixes += c.getLong(0) to proper
+            }
+        }
+        if (fixes.isEmpty()) return
+        db.beginTransaction()
+        try {
+            val stmt = db.compileStatement("UPDATE items SET year = ? WHERE rowid = ?")
+            fixes.forEach { (rowid, y) ->
+                stmt.clearBindings()
+                if (y == null) stmt.bindNull(1) else stmt.bindLong(1, y.toLong())
+                stmt.bindLong(2, rowid)
+                stmt.executeUpdateDelete()
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     /**
@@ -160,7 +196,7 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
         val found = ArrayList<Pair<Long, Int>>()
         db.rawQuery("SELECT rowid, name FROM items WHERE year IS NULL", null).use { c ->
             while (c.moveToNext()) {
-                val y = yearInTitle(c.getString(1) ?: continue) ?: continue
+                val y = releaseYearInName(c.getString(1) ?: continue) ?: continue
                 found += c.getLong(0) to y
             }
         }
@@ -583,6 +619,31 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
 
         /** A year in a provider title ("Big Brother UK 2023"), if any. */
         fun yearInTitle(name: String): Int? = YEAR_ANYWHERE.findAll(name).lastOrNull()?.value?.toIntOrNull()
+
+        /** The latest believable release year (next year, for titles listed early). */
+        fun latestYear(): Int = java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) + 1
+
+        /**
+         * A title's release year from its name, for sorting: only a year the provider added to
+         * the name, in brackets ("Movie (2018)") or at the end ("Movie - 2018", "Movie 2018").
+         * A number that's part of the title ("2038 Origin Unknown", "1917", "2001: A Space
+         * Odyssey") isn't one, and neither is a year still to come.
+         */
+        fun releaseYearInName(name: String): Int? {
+            val latest = latestYear()
+            YEAR_IN_BRACKETS.findAll(name).lastOrNull()?.value?.trim('(', ')')?.toIntOrNull()
+                ?.takeIf { it <= latest }?.let { return it }
+            // At the end, after the title (quality tags like "4K" or "1080p" set aside).
+            var rest = name.trim()
+            repeat(3) { rest = rest.replace(QUALITY_AT_END, "").trim() }
+            val m = TRAILING_YEAR.find(rest) ?: return null
+            val before = rest.substring(0, m.range.first).trim()
+            // Something has to come before it (a title that's only a year is a title).
+            if (before.none { it.isLetter() }) return null
+            return m.groupValues[1].toIntOrNull()?.takeIf { it <= latest }
+        }
+
+        private val TRAILING_YEAR = Regex("""(?:^|[\s\-|:,.])((?:19|20)\d{2})\s*$""")
 
         fun normalizeWords(s: String): List<String> =
             s.replace(PREFIX, "")

@@ -143,10 +143,22 @@ fun LiveTvPlayerScreen(
     var videoFps by remember { mutableStateOf(-1f) }
     LaunchedEffect(playback.channelKey, playback.catchupTitle) {
         while (true) {
-            val f = viewModel.playback.player?.videoFormat
+            val p = viewModel.playback.player
+            val f = p?.videoFormat
             if (f != null) {
                 if (playback.catchupTitle == null) playback.channelKey?.let { viewModel.recordQuality(it, f.height) }
-                if (f.frameRate > 0f) videoFps = f.frameRate
+                // The stream's stated frame rate, else the one measured from its frames (many
+                // live streams don't state it, so the display was never switched).
+                val fps = if (f.frameRate > 0f) f.frameRate else viewModel.playback.measuredFps
+                if (fps > 0f) videoFps = fps
+            }
+            // Match Frame Rate switches the display itself: the player's own frame rate hint to
+            // the screen is turned off then, so the two don't pull against each other.
+            runCatching {
+                p?.setVideoChangeFrameRateStrategy(
+                    if (settings.matchFrameRate) androidx.media3.common.C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF
+                    else androidx.media3.common.C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_ONLY_IF_SEAMLESS
+                )
             }
             delay(3_000)
         }
@@ -1063,9 +1075,24 @@ private fun MatchFrameRate(enabled: Boolean, fps: Float) {
         val candidates = display.supportedModes.filter {
             it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight
         }
-        fun fit(refresh: Float): Float = (1..4).minOf { k -> kotlin.math.abs(refresh - fps * k) }
-        val best = candidates.minByOrNull { fit(it.refreshRate) } ?: return@LaunchedEffect
-        if (fit(best.refreshRate) > 0.6f || best.modeId == current.modeId) return@LaunchedEffect
+        // The refresh rates that show every frame for the same time: a whole multiple of the
+        // frame rate (25 fps: 25, 50, 75 Hz; 29.97 fps: 59.94 Hz). Close enough counts, but an
+        // exact match wins (59.94 over 60 Hz for 29.97 fps, which otherwise skips a frame every
+        // 16 seconds). Of those, the highest up to 60 Hz: sports at 25 fps are usually
+        // interlaced and move 50 times a second, so 25 Hz stuttered where 50 Hz is smooth.
+        fun error(refresh: Float): Float = (1..4).minOf { k -> kotlin.math.abs(refresh - fps * k) }
+        val fitting = candidates.filter { error(it.refreshRate) <= 0.6f }
+        val best = fitting.sortedWith(
+            compareBy<android.view.Display.Mode>(
+                { if (error(it.refreshRate) < 0.02f) 0 else 1 },
+                { if (it.refreshRate <= 61f) 0 else 1 },
+                { -it.refreshRate }
+            )
+        ).firstOrNull() ?: return@LaunchedEffect
+        if (best.modeId == current.modeId) return@LaunchedEffect
+        com.nuvio.tv.livetv.model.LiveTvLoadReport.add(
+            "Match frame rate: video %.3f fps, display %.3f Hz → %.3f Hz".format(fps, current.refreshRate, best.refreshRate)
+        )
         val attrs = activity.window.attributes
         attrs.preferredDisplayModeId = best.modeId
         activity.window.attributes = attrs

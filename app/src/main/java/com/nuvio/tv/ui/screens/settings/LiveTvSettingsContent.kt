@@ -931,11 +931,45 @@ fun LiveTvSettingsContent(
                         s.showInSidebar,
                         { update { it.copy(showInSidebar = !it.showInSidebar) } }
                     )
+                    // Search from Home and the side menu always shows everything; these set what
+                    // search shows when it's opened from the guide or from On Demand.
+                    SubHeading("Search from the Guide Shows")
                     SettingsToggleRow(
-                        "Show Channels in Nuvio Search",
-                        "Channels and TV shows appear in Nuvio's search results",
-                        s.showInSearch,
-                        { update { it.copy(showInSearch = !it.showInSearch) } }
+                        "Live TV",
+                        "Channels and shows in the guide",
+                        s.guideSearchLive,
+                        { update { it.copy(guideSearchLive = !it.guideSearchLive) } }
+                    )
+                    SettingsToggleRow(
+                        "Movies & Series",
+                        "Titles from your Nuvio addons",
+                        s.guideSearchCatalog,
+                        { update { it.copy(guideSearchCatalog = !it.guideSearchCatalog) } }
+                    )
+                    SettingsToggleRow(
+                        "On Demand",
+                        "Your provider's own movies and series",
+                        s.guideSearchOnDemand,
+                        { update { it.copy(guideSearchOnDemand = !it.guideSearchOnDemand) } }
+                    )
+                    SubHeading("Search from On Demand Shows")
+                    SettingsToggleRow(
+                        "Live TV",
+                        "Channels and shows in the guide",
+                        s.onDemandSearchLive,
+                        { update { it.copy(onDemandSearchLive = !it.onDemandSearchLive) } }
+                    )
+                    SettingsToggleRow(
+                        "Movies & Series",
+                        "Titles from your Nuvio addons",
+                        s.onDemandSearchCatalog,
+                        { update { it.copy(onDemandSearchCatalog = !it.onDemandSearchCatalog) } }
+                    )
+                    SettingsToggleRow(
+                        "On Demand",
+                        "Your provider's own movies and series",
+                        s.onDemandSearchOnDemand,
+                        { update { it.copy(onDemandSearchOnDemand = !it.onDemandSearchOnDemand) } }
                     )
                 }
             }
@@ -1010,6 +1044,12 @@ fun LiveTvSettingsContent(
                     open = "recordings" in open,
                     onToggle = { toggle("recordings") }
                 ) {
+                    SettingsToggleRow(
+                        "Show Recordings in the Side Menu",
+                        "Once anything is recorded or set to record",
+                        s.recordingsInSidebar,
+                        { update { it.copy(recordingsInSidebar = !it.recordingsInSidebar) } }
+                    )
                     SettingsActionRow(
                         title = "Save Recordings To",
                         subtitle = if (chosen == null && s.recordingStorage.isNotEmpty())

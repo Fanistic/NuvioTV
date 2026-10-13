@@ -401,7 +401,8 @@ class OnDemandRepository @Inject constructor(
                             // The first of these that has a year: providers often send an empty
                             // year field, which used to stop it trying the others (and the name).
                             year = listOf(f["year"], f["releaseDate"], f["release_date"]).firstNotNullOfOrNull { yearOf(it) }
-                                ?: OnDemandDatabase.yearInTitle(name),
+                                ?.takeIf { it <= OnDemandDatabase.latestYear() }
+                                ?: OnDemandDatabase.releaseYearInName(name),
                             rating = f["rating"]?.takeIf { it.isNotBlank() && it != "0" },
                             addedSec = (f["added"] ?: f["last_modified"])?.toLongOrNull() ?: 0L,
                             genre = f["genre"]?.trim()?.takeIf { it.isNotBlank() }

@@ -84,6 +84,12 @@ class LiveTvPreferences @Inject constructor(
         val channelSort = stringPreferencesKey("channel_sort")
         val solidHighlight = booleanPreferencesKey("solid_highlight")
         val showInSearch = booleanPreferencesKey("show_in_search")
+        val guideSearchLive = booleanPreferencesKey("guide_search_live")
+        val guideSearchCatalog = booleanPreferencesKey("guide_search_catalog")
+        val guideSearchOnDemand = booleanPreferencesKey("guide_search_ondemand")
+        val vodSearchLive = booleanPreferencesKey("vod_search_live")
+        val vodSearchCatalog = booleanPreferencesKey("vod_search_catalog")
+        val vodSearchOnDemand = booleanPreferencesKey("vod_search_ondemand")
         val showAllGroup = booleanPreferencesKey("show_all_group")
         val resumeInPreview = booleanPreferencesKey("resume_in_preview")
         val showGroupCounts = booleanPreferencesKey("show_group_counts")
@@ -99,6 +105,7 @@ class LiveTvPreferences @Inject constructor(
         val showQualityBadges = booleanPreferencesKey("show_quality_badges")
         val matchFrameRate = booleanPreferencesKey("match_frame_rate")
         val onDemandInSidebar = booleanPreferencesKey("on_demand_in_sidebar")
+        val recordingsInSidebar = booleanPreferencesKey("recordings_in_sidebar")
         val onDemandInStreams = booleanPreferencesKey("on_demand_in_streams")
         val onDemandAddonPosters = booleanPreferencesKey("on_demand_addon_posters")
         val groupPlaylistHeadings = booleanPreferencesKey("group_playlist_headings")
@@ -262,6 +269,12 @@ class LiveTvPreferences @Inject constructor(
             channelSort = p[Keys.channelSort]?.let { runCatching { ChannelSort.valueOf(it) }.getOrNull() } ?: d.channelSort,
             solidHighlight = p[Keys.solidHighlight] ?: d.solidHighlight,
             showInSearch = p[Keys.showInSearch] ?: d.showInSearch,
+            guideSearchLive = p[Keys.guideSearchLive] ?: d.guideSearchLive,
+            guideSearchCatalog = p[Keys.guideSearchCatalog] ?: d.guideSearchCatalog,
+            guideSearchOnDemand = p[Keys.guideSearchOnDemand] ?: d.guideSearchOnDemand,
+            onDemandSearchLive = p[Keys.vodSearchLive] ?: d.onDemandSearchLive,
+            onDemandSearchCatalog = p[Keys.vodSearchCatalog] ?: d.onDemandSearchCatalog,
+            onDemandSearchOnDemand = p[Keys.vodSearchOnDemand] ?: d.onDemandSearchOnDemand,
             showAllChannelsGroup = p[Keys.showAllGroup] ?: d.showAllChannelsGroup,
             resumeLastInPreview = p[Keys.resumeInPreview] ?: d.resumeLastInPreview,
             showGroupCounts = p[Keys.showGroupCounts] ?: d.showGroupCounts,
@@ -277,6 +290,7 @@ class LiveTvPreferences @Inject constructor(
             showQualityBadges = p[Keys.showQualityBadges] ?: d.showQualityBadges,
             matchFrameRate = p[Keys.matchFrameRate] ?: d.matchFrameRate,
             onDemandInSidebar = p[Keys.onDemandInSidebar] ?: d.onDemandInSidebar,
+            recordingsInSidebar = p[Keys.recordingsInSidebar] ?: d.recordingsInSidebar,
             onDemandInStreams = p[Keys.onDemandInStreams] ?: d.onDemandInStreams,
             onDemandAddonPosters = p[Keys.onDemandAddonPosters] ?: d.onDemandAddonPosters,
             groupPlaylistHeadings = p[Keys.groupPlaylistHeadings] ?: d.groupPlaylistHeadings,
@@ -395,6 +409,12 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.channelSort] = s.channelSort.name
         p[Keys.solidHighlight] = s.solidHighlight
         p[Keys.showInSearch] = s.showInSearch
+        p[Keys.guideSearchLive] = s.guideSearchLive
+        p[Keys.guideSearchCatalog] = s.guideSearchCatalog
+        p[Keys.guideSearchOnDemand] = s.guideSearchOnDemand
+        p[Keys.vodSearchLive] = s.onDemandSearchLive
+        p[Keys.vodSearchCatalog] = s.onDemandSearchCatalog
+        p[Keys.vodSearchOnDemand] = s.onDemandSearchOnDemand
         p[Keys.showAllGroup] = s.showAllChannelsGroup
         p[Keys.resumeInPreview] = s.resumeLastInPreview
         p[Keys.showGroupCounts] = s.showGroupCounts
@@ -410,6 +430,7 @@ class LiveTvPreferences @Inject constructor(
         p[Keys.showQualityBadges] = s.showQualityBadges
         p[Keys.matchFrameRate] = s.matchFrameRate
         p[Keys.onDemandInSidebar] = s.onDemandInSidebar
+        p[Keys.recordingsInSidebar] = s.recordingsInSidebar
         p[Keys.onDemandInStreams] = s.onDemandInStreams
         p[Keys.onDemandAddonPosters] = s.onDemandAddonPosters
         p[Keys.groupPlaylistHeadings] = s.groupPlaylistHeadings

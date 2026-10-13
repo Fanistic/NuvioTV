@@ -198,6 +198,16 @@ data class LiveTvSettings(
     val solidHighlight: Boolean = false,
     /** Show matching channels and programs in Nuvio's search. */
     val showInSearch: Boolean = true,
+    /**
+     * What search shows when opened from the guide, and from On Demand. Search opened from
+     * anywhere else (Home, the side menu) always shows everything.
+     */
+    val guideSearchLive: Boolean = true,
+    val guideSearchCatalog: Boolean = false,
+    val guideSearchOnDemand: Boolean = false,
+    val onDemandSearchLive: Boolean = false,
+    val onDemandSearchCatalog: Boolean = false,
+    val onDemandSearchOnDemand: Boolean = true,
     val showAllChannelsGroup: Boolean = true,
     /** When Live TV opens, start the last channel in the preview window and highlight it. */
     val resumeLastInPreview: Boolean = true,
@@ -227,6 +237,8 @@ data class LiveTvSettings(
     val matchFrameRate: Boolean = false,
     /** Show On Demand in Nuvio's side menu (when there's something to show). */
     val onDemandInSidebar: Boolean = true,
+    /** Recordings in the side menu (once anything is recorded or set to record). */
+    val recordingsInSidebar: Boolean = true,
     /** Offer "Watch On Demand" in Nuvio's stream list for movies and episodes. */
     val onDemandInStreams: Boolean = true,
     /** On Demand posters from your own addons (off = the provider's images only). */

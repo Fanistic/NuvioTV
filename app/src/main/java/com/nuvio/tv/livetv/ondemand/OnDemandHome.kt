@@ -72,7 +72,10 @@ object VodHomeIds {
         items = items,
         isLoading = false,
         hasMore = hasMore,
-        currentPage = page
+        currentPage = page,
+        // Nuvio's Modern layout only asks a row for more titles when its catalog says it can
+        // page; without this, Modern stopped every On Demand row at its first 30 titles.
+        supportsSkip = true
     )
 }
 

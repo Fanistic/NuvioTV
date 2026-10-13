@@ -78,7 +78,8 @@ private const val UPCOMING_WINDOW_MS = 6L * 60 * 60 * 1000
 @Composable
 fun rememberLiveTvSearchResults(
     query: String,
-    onOpened: () -> Unit
+    onOpened: () -> Unit,
+    enabled: Boolean = true
 ): LiveTvSearchResults {
     // Live TV turned off for search (or hidden from the menu): Nuvio's search stays exactly as
     // it is without the fork — movies and series only. Live TV isn't even loaded here, so it
@@ -91,9 +92,8 @@ fun rememberLiveTvSearchResults(
     }
     val liveSettings by prefs.settings.collectAsStateWithLifecycle(initialValue = null)
     val s = liveSettings
-    val liveOnly by LiveTvSearchBridge.liveOnly.collectAsStateWithLifecycle()
-    // Opened from Live TV: always search Live TV, whatever the "Show in Nuvio search" setting.
-    if (s == null || (!liveOnly && (!s.showInSearch || !s.showInSidebar))) {
+    // What this search shows (by where it was opened from; see rememberSearchScope).
+    if (s == null || !enabled) {
         return remember { LiveTvSearchResults(emptyList(), false, {}, { null }) }
     }
     return rememberLiveTvSearchResultsEnabled(query, onOpened)
@@ -118,9 +118,7 @@ private fun rememberLiveTvSearchResultsEnabled(
         if (q.length >= 2) delay(300)
         value = q
     }
-    // Opened from Live TV: always search Live TV, whatever "Show in Nuvio search" says.
-    val liveOnly by LiveTvSearchBridge.liveOnly.collectAsStateWithLifecycle()
-    val searchLive = settings.showInSearch || liveOnly
+    val searchLive = true
     val hits by produceState(initialValue = emptyList<LiveSearchHit>(), settled, ui.allVisibleChannels, programs, now, searchLive) {
         val q = settled
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
@@ -351,11 +349,15 @@ private fun startsInLabel(ms: Long): String {
  */
 object LiveTvSearchBridge {
     /**
-     * True when search was opened from Live TV (its Search button, the Search key, or the
-     * channel menu): only Live TV results are shown. Search from Nuvio's menu shows everything.
-     * Cleared when the search screen closes.
+     * Where search was opened from: the guide ([GUIDE]: its Search button, the Search key or
+     * the channel menu), On Demand ([ON_DEMAND]), or anywhere else ([HOME]: everything shows).
+     * What the guide and On Demand show is set in Live TV settings. Back to [HOME] when the
+     * search screen closes.
      */
-    val liveOnly = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val origin = kotlinx.coroutines.flow.MutableStateFlow(HOME)
+    const val HOME = "home"
+    const val GUIDE = "guide"
+    const val ON_DEMAND = "ondemand"
 
     /** The title waiting to be searched, or null. The search screen collects this. */
     val pending = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
@@ -479,4 +481,31 @@ private fun ChannelQuickMenu(channel: LiveChannel, viewModel: LiveTvViewModel, o
             LaunchedEffect(Unit) { kotlinx.coroutines.delay(60); runCatching { first.requestFocus() } }
         }
     }
+}
+
+
+/** What a search shows: Live TV, Nuvio's movies and series, your provider's On Demand. */
+data class SearchScope(val live: Boolean, val catalog: Boolean, val onDemand: Boolean)
+
+/**
+ * What this search shows, by where it was opened from: from the guide or On Demand, what's set
+ * for it in Live TV settings (by default the guide shows Live TV, On Demand shows On Demand);
+ * from anywhere else (Home, the side menu), everything.
+ */
+@Composable
+fun rememberSearchScope(): SearchScope {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            context.applicationContext, com.nuvio.tv.livetv.startup.LiveTvStartupEntryPoint::class.java
+        ).liveTvPreferences()
+    }
+    val settings by prefs.settings.collectAsStateWithLifecycle(initialValue = null)
+    val origin by LiveTvSearchBridge.origin.collectAsStateWithLifecycle()
+    val s = settings ?: com.nuvio.tv.livetv.model.LiveTvSettings()
+    return when (origin) {
+        LiveTvSearchBridge.GUIDE -> SearchScope(s.guideSearchLive, s.guideSearchCatalog, s.guideSearchOnDemand)
+        LiveTvSearchBridge.ON_DEMAND -> SearchScope(s.onDemandSearchLive, s.onDemandSearchCatalog, s.onDemandSearchOnDemand)
+        else -> SearchScope(live = true, catalog = true, onDemand = true)
+    }.let { if (!it.live && !it.catalog && !it.onDemand) SearchScope(true, true, true) else it }
 }

@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -780,6 +781,7 @@ class LiveTvRepository @Inject constructor(
         val from = pre?.from ?: (now - 60 * 60 * 1000L)
         val to = pre?.to ?: (now + 4 * HOUR)
         _programs.value = pre?.window.orEmpty()
+        fullRangeChannels.clear()
         _autoMatches.value = runCatching { guideDb.autoMatches() }.getOrDefault(emptyMap())
         loadedFrom = from
         loadedTo = to
@@ -844,27 +846,92 @@ class LiveTvRepository @Inject constructor(
             // like a group you just opened); only the merge is locked.
             val from = minOf(fromMs, loadedFrom)
             // A few hours extra ahead: the guide asks for "12 hours from now" every 30 seconds,
-            // and without slack each ask went past what was loaded by 30 seconds, so every
-            // channel's listings were read from the database again, twice a minute, all day
-            // (also while Live TV wasn't even open, and while watching in Nuvio's player).
+            // and without slack each ask went past what was loaded by 30 seconds.
             val to = maxOf(toMs + RANGE_SLACK_MS, loadedTo)
-            val loaded = runCatching { guideDb.range(from, to, light = lightPrograms) }.getOrNull() ?: return@launch
+            // Only the hours not loaded yet. It used to read everything from the earliest hour
+            // loaded to the latest again, for every channel, each time the guide was scrolled
+            // further ahead: the further you went, the longer each read took, so new listings
+            // took up to a minute to appear at the end of what was shown.
+            val haveSome = loadedFrom != Long.MAX_VALUE && loadedTo != Long.MIN_VALUE && loadedFrom < loadedTo
+            val parts = if (!haveSome || to <= loadedFrom || from >= loadedTo) listOf(from to to)
+            else buildList {
+                if (from < loadedFrom) add(from to loadedFrom)
+                if (to > loadedTo) add(loadedTo to to)
+            }
+            val reads = parts.map { (f, t) ->
+                runCatching { guideDb.range(f, t, light = lightPrograms) }.getOrNull() ?: return@launch
+            }
             rangeMutex.withLock {
                 if (fromMs >= loadedFrom && toMs <= loadedTo) return@withLock
-                // Keep any full single-channel schedules already loaded (overlay mode, catch-up).
-                val merged = HashMap<String, List<EpgProgram>>(loaded)
-                _programs.value.forEach { (ch, list) ->
-                    val fromDb = merged[ch]
-                    if (fromDb == null || list.size > fromDb.size) merged[ch] = list
+                val merged = HashMap(_programs.value)
+                reads.forEach { got ->
+                    got.forEach { (ch, list) ->
+                        val cur = merged[ch]
+                        merged[ch] = if (cur.isNullOrEmpty()) list else {
+                            // Shows running across the edge come back in both reads: once each.
+                            val starts = cur.mapTo(HashSet()) { it.startMs }
+                            val extra = list.filter { it.startMs !in starts }
+                            if (extra.isEmpty()) cur else (cur + extra).sortedBy { it.startMs }
+                        }
+                    }
                 }
                 _programs.value = merged
-                loadedFrom = from
-                loadedTo = to
+                loadedFrom = minOf(from, loadedFrom)
+                loadedTo = maxOf(to, loadedTo)
             }
           } finally {
             rangeBusy.set(false)
             pendingRange?.let { (f, t) -> pendingRange = null; ensureRange(f, t) }
           }
+        }
+    }
+
+    // ---------------------------------------------------------------- a group's full guide
+
+    /** Channels whose listings are loaded for the whole guide (as many days ahead as set). */
+    private val fullRangeChannels = java.util.Collections.synchronizedSet(HashSet<String>())
+    private var fullRangeJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * The group on screen: its channels' listings for every day the guide keeps (Guide Days
+     * Ahead), read in the background, so scrolling ahead in it never runs into the end of
+     * what's loaded. Only the group's channels (at most [MAX_FULL_RANGE_CHANNELS], from the
+     * top): all days for every channel of every playlist would be too much for smaller boxes.
+     */
+    fun ensureFullRange(channelKeys: List<String>) {
+        if (!guideInDb || channelKeys.isEmpty()) return
+        val todo = channelKeys.take(MAX_FULL_RANGE_CHANNELS).filter { it !in fullRangeChannels }
+        if (todo.isEmpty()) return
+        fullRangeJob?.cancel()
+        fullRangeJob = scope.launch(Dispatchers.IO) {
+            val settings = prefs.currentSettings()
+            val now = System.currentTimeMillis()
+            val from = now - HOUR
+            val to = now + settings.epgFutureDays.coerceAtLeast(1) * 24 * HOUR
+            // A batch at a time, so the first channels fill in quickly and a group change
+            // stops the rest.
+            for (batch in todo.chunked(60)) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                val got = runCatching { guideDb.range(from, to, light = lightPrograms, channels = batch) }.getOrNull() ?: return@launch
+                rangeMutex.withLock {
+                    val merged = HashMap(_programs.value)
+                    batch.forEach { ch ->
+                        val list = got[ch].orEmpty()
+                        val cur = merged[ch]
+                        merged[ch] = when {
+                            list.isEmpty() -> cur ?: return@forEach
+                            cur.isNullOrEmpty() -> list
+                            else -> {
+                                val starts = cur.mapTo(HashSet()) { it.startMs }
+                                val extra = list.filter { it.startMs !in starts }
+                                if (extra.isEmpty()) cur else (cur + extra).sortedBy { it.startMs }
+                            }
+                        }
+                    }
+                    _programs.value = merged
+                }
+                fullRangeChannels += batch
+            }
         }
     }
 
@@ -1252,6 +1319,19 @@ class LiveTvRepository @Inject constructor(
             val label = runCatching { java.net.URI(target.url).host?.removePrefix("www.") }.getOrNull()
                 ?.takeIf { it.isNotBlank() } ?: target.name
             sourceMeta += Triple(target, label, entries.sortedBy { it.displayName.lowercase() })
+            // How far ahead this guide's listings actually go (the file's own last show), so a
+            // guide that stops early can be told apart from the app cutting it short.
+            run {
+                val lastStop = parsed.programs.values.maxOfOrNull { l -> l.maxOfOrNull { it.stopMs } ?: 0L } ?: 0L
+                if (lastStop > 0) {
+                    val fmt = java.text.SimpleDateFormat("EEE d MMM, h:mm a", java.util.Locale.getDefault())
+                    val hours = ((lastStop - System.currentTimeMillis()) / HOUR).coerceAtLeast(0)
+                    LIVE_REPORT.add(
+                        "Guide \"${target.name}\": listings until ${fmt.format(java.util.Date(lastStop))} " +
+                            "(about $hours hours ahead; set to ${settings.epgFutureDays} days)"
+                    )
+                }
+            }
 
             pinnedHere.forEach { (key, a) -> pinned[key] = cleanListings(parsed.programs[a.xmltvId].orEmpty()) }
 
@@ -1320,6 +1400,7 @@ class LiveTvRepository @Inject constructor(
             lightPrograms = false
             val (from, to) = defaultWindow()
             _programs.value = result.mapValues { (_, l) -> l.filter { it.stopMs > from && it.startMs < to } }.filterValues { it.isNotEmpty() }
+            fullRangeChannels.clear()
             loadedFrom = from
             loadedTo = to
             guideInDb = true
@@ -1483,6 +1564,7 @@ class LiveTvRepository @Inject constructor(
             }
         }
         _autoMatches.value = (_autoMatches.value - changed) + newAuto
+        fullRangeChannels.removeAll(changed)
         val logos = HashMap(_epgLogos.value).apply { changed.forEach { remove(it) }; putAll(newIcons) }
         _epgLogos.value = logos
         saveEpgLogos(logos)
@@ -1838,7 +1920,10 @@ class LiveTvRepository @Inject constructor(
         private const val TAG = "LiveTvRepository"
         private const val HOUR = 60L * 60L * 1000L
         /** Extra guide hours read ahead, so the window moves along a few times a day, not constantly. */
-        private const val RANGE_SLACK_MS = 3 * HOUR
+        /** The most channels of one group whose listings are loaded for every day ahead. */
+        private const val MAX_FULL_RANGE_CHANNELS = 400
+        // Hours read ahead of what's asked for (each read only adds the hours not loaded yet).
+        private const val RANGE_SLACK_MS = 6 * HOUR
         private const val GUIDE_CACHE_VERSION = 1
         private const val CHANNELS_CACHE_VERSION = 6
         private const val MAX_SAVED_LISTINGS = 300_000

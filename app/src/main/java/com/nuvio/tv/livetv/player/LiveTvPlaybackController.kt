@@ -394,6 +394,37 @@ class LiveTvPlaybackController @Inject constructor(
      */
     /** Live TV buffer size ("small", "normal", "large", "xlarge"); changing it rebuilds the player. */
     var bufferSize: String = "normal"
+
+    /**
+     * The video's frame rate as measured from the frames themselves (for Match Frame Rate).
+     * Many live streams don't state their frame rate, so the player's own value is often
+     * missing and the display was never switched.
+     */
+    @Volatile var measuredFps: Float = -1f
+        private set
+    private val frameDeltas = LongArray(48)
+    private var frameDeltaCount = 0
+    private var lastFrameUs = Long.MIN_VALUE
+    private val frameListener = androidx.media3.exoplayer.video.VideoFrameMetadataListener { presentationTimeUs, _, _, _ ->
+        val last = lastFrameUs
+        lastFrameUs = presentationTimeUs
+        if (last == Long.MIN_VALUE) return@VideoFrameMetadataListener
+        val d = presentationTimeUs - last
+        if (d !in 5_000L..100_000L) return@VideoFrameMetadataListener // a jump, a seek, a new channel
+        frameDeltas[frameDeltaCount % frameDeltas.size] = d
+        frameDeltaCount++
+        if (frameDeltaCount >= frameDeltas.size && frameDeltaCount % 24 == 0) {
+            val median = frameDeltas.sorted()[frameDeltas.size / 2]
+            measuredFps = 1_000_000f / median
+        }
+    }
+
+    /** A new channel: measure its frame rate afresh. */
+    private fun resetFrameRate() {
+        measuredFps = -1f
+        frameDeltaCount = 0
+        lastFrameUs = Long.MIN_VALUE
+    }
         set(value) {
             if (field == value) return
             field = value
@@ -456,7 +487,7 @@ class LiveTvPlaybackController @Inject constructor(
         if (_recordingPlayback.value != null) { _recordingPlayback.value = null; shiftJob?.cancel() }
         archiveStartWallMs = if (catchupTitle != null) catchupStartMs else null
         archiveWallMapped = false
-        if (currentChannel?.key != channel.key) captionsHandled = false
+        if (currentChannel?.key != channel.key) { captionsHandled = false; resetFrameRate() }
         val url = overrideUrl ?: channel.url
         if (currentChannel?.key != channel.key || currentUrl != url) {
             forcedMime = null
@@ -810,6 +841,7 @@ class LiveTvPlaybackController @Inject constructor(
                 addListener(listener)
                 // Choppy video ("slide show"): how many frames the box couldn't show in time,
                 // in the start-up report, so we can see when it starts and what was going on.
+                setVideoFrameMetadataListener(frameListener)
                 addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
                     private var droppedTotal = 0L
                     private var lastReportAt = 0L

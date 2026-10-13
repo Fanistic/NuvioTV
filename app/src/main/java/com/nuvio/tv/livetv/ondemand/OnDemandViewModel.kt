@@ -157,6 +157,29 @@ class OnDemandViewModel @Inject constructor(
         loadItems(reset = true)
     }
 
+    /**
+     * Nuvio's search (the On Demand row): your provider's movies and series whose names match,
+     * movies first. Hidden and locked groups are left out, as everywhere else.
+     */
+    suspend fun searchEverywhere(text: String, limit: Int = 40): List<VodItem> {
+        val q = text.trim()
+        if (q.length < 2) return emptyList()
+        val user = prefs.userState.first()
+        val s = prefs.settings.first()
+        val all = repository.categories(VodKind.MOVIE) + repository.categories(VodKind.SERIES)
+        val hidden = user.vodHiddenCategories + all.filter { c ->
+            ParentalControls.isLocked("vod:${c.uid}", c.name, s, user.lockedGroups)
+        }.map { it.uid }
+        val merge = s.vodMergeDuplicates
+        val movies = repository.search(VodKind.MOVIE, q, hidden, merge = merge)
+        val series = repository.search(VodKind.SERIES, q, hidden, merge = merge)
+        // Some of each, so a long list of movies doesn't hide the series.
+        val half = limit / 2
+        val m = movies.take(maxOf(half, limit - series.size))
+        val sr = series.take(limit - m.size)
+        return m + sr
+    }
+
     fun search(text: String) {
         _ui.value = _ui.value.copy(query = text.trim())
         loadItems(reset = true)
@@ -381,11 +404,20 @@ class OnDemandViewModel @Inject constructor(
             val (sort, seed) = sortOf(uid)
             // Read on from where the catalog left off (not from how many are shown: titles
             // dropped as duplicates would otherwise be read again, page after page).
-            val offset = homeRead[uid] ?: have.size
-            val raw = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, offset, sort, merge = settings.value.vodMergeDuplicates, seed = seed)
-            if (raw.size < HOME_PAGE) homeEnded += uid
-            homeRead[uid] = offset + raw.size
-            val more = dedupe(have, raw)
+            var offset = homeRead[uid] ?: have.size
+            // A page where every title was already shown (copies of earlier ones) added nothing,
+            // and the row never asked for more again: it stopped there (30 titles out of
+            // hundreds). Keep reading until there's something new, or the group has ended.
+            var more: List<VodItem>
+            var pages = 0
+            while (true) {
+                val raw = repository.items(c.kind, c, emptySet(), false, HOME_PAGE, offset, sort, merge = settings.value.vodMergeDuplicates, seed = seed)
+                offset += raw.size
+                if (raw.size < HOME_PAGE) homeEnded += uid
+                more = dedupe(have, raw)
+                if (more.isNotEmpty() || uid in homeEnded || ++pages >= 40) break
+            }
+            homeRead[uid] = offset
             primePosters(more)
             homeItems[uid] = have + more
             updateHomeRows()

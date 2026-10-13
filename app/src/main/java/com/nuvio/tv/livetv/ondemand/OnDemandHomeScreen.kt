@@ -256,6 +256,8 @@ fun OnDemandHomeScreen(
     // and with the menu open Back is left to the app (exit).
     val openSidebar = com.nuvio.tv.LocalOpenSidebar.current
     val sidebarOpen = com.nuvio.tv.LocalSidebarExpanded.current
+    val topFocusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val topContentFocus = com.nuvio.tv.LocalContentFocusRequester.current
     androidx.activity.compose.BackHandler(enabled = !sidebarOpen) { openSidebar() }
 
     androidx.compose.runtime.CompositionLocalProvider(com.nuvio.tv.core.player.LocalTrailerPlayerPool provides ownPool) {
@@ -383,7 +385,17 @@ fun OnDemandHomeScreen(
 
         // Top right: Nuvio's search and Manage VOD Groups (not over See all).
         if (seeAllUid == null) Row(
-            modifier = Modifier.align(Alignment.TopEnd).padding(top = 24.dp, end = 32.dp),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 24.dp, end = 32.dp)
+                // Down from these buttons: into the titles. In the Grid layout there's nothing
+                // directly below them for Down to find, so it went nowhere (you had to go out to
+                // the menu and back); then it goes to where the page's highlight was.
+                .onPreviewKeyEvent { e ->
+                    if (e.type != KeyEventType.KeyDown || e.key != Key.DirectionDown) return@onPreviewKeyEvent false
+                    if (topFocusManager.moveFocus(androidx.compose.ui.focus.FocusDirection.Down)) true
+                    else { runCatching { topContentFocus.requestFocus() }; true }
+                },
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {

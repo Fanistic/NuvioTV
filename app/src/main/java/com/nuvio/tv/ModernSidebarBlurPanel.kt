@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -196,45 +198,67 @@ internal fun ModernSidebarBlurPanel(
 
         Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
 
-        // Live TV fork: the list starts just under the logo (centred, a longer list grew up
-        // into it).
-        Spacer(modifier = Modifier.height(NuvioTheme.spacing.lg))
+        // Live TV fork: every page in one menu. Slimmer items, a thin line between Nuvio's pages
+        // and the Live TV pages, Settings kept at the bottom, and the list starts under the logo
+        // (scrolling if it ever doesn't fit) instead of being centred, which grew up into the
+        // logo as pages were added.
+        val renderItem: @Composable (Int, DrawerItem) -> Unit = { index, item ->
+            key(item.route) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (item.sectionStart) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth(0.8f)
+                                .padding(vertical = 5.dp)
+                                .height(1.dp)
+                                .graphicsLayer { alpha = sidebarLabelAlpha }
+                                .background(Color.White.copy(alpha = 0.14f))
+                        )
+                    }
+                    SidebarNavigationItem(
+                        label = item.label,
+                        iconRes = item.iconRes,
+                        icon = item.icon,
+                        selected = selectedDrawerRoute == item.route,
+                        focusEnabled = keepSidebarFocusDuringCollapse,
+                        labelAlpha = sidebarLabelAlpha,
+                        iconScale = sidebarIconScale,
+                        onFocusChanged = {
+                            if (it) {
+                                onDrawerItemFocused(index)
+                            }
+                        },
+                        onClick = { onDrawerItemClick(item.route) },
+                        // Live TV fork: recording dot.
+                        badge = item.badge,
+                        modifier = Modifier
+                            .fillMaxWidth(0.92f)
+                            .focusRequester(drawerItemFocusRequesters.getValue(item.route))
+                    )
+                }
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .weight(1f),
-            verticalArrangement = Arrangement.Top,
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                // Room for the highlighted item, which grows a little.
+                .padding(vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm - NuvioTheme.spacing.xxs)
-            ) {
-                drawerItems.forEachIndexed { index, item ->
-                    key(item.route) {
-                        SidebarNavigationItem(
-                            label = item.label,
-                            iconRes = item.iconRes,
-                            icon = item.icon,
-                            selected = selectedDrawerRoute == item.route,
-                            focusEnabled = keepSidebarFocusDuringCollapse,
-                            labelAlpha = sidebarLabelAlpha,
-                            iconScale = sidebarIconScale,
-                            onFocusChanged = {
-                                if (it) {
-                                    onDrawerItemFocused(index)
-                                }
-                            },
-                            onClick = { onDrawerItemClick(item.route) },
-                            // Live TV fork: recording dot, and the arrow on Live TV (opens its list).
-                            badge = item.badge,
-                            trailingIcon = if (item.isGroup && !item.groupOpen) Icons.Default.ChevronRight else null,
-                            modifier = Modifier
-                                .fillMaxWidth(0.92f)
-                                .focusRequester(drawerItemFocusRequesters.getValue(item.route))
-                        )
-                    }
-                }
-            }
+            drawerItems.forEachIndexed { index, item -> if (!item.pinnedBottom) renderItem(index, item) }
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            drawerItems.forEachIndexed { index, item -> if (item.pinnedBottom) renderItem(index, item) }
         }
     }
 }
@@ -337,7 +361,7 @@ private fun SidebarNavigationItem(
                     this.selected = selected
                 }
                 .fillMaxWidth()
-                .padding(horizontal = NuvioTheme.spacing.lg - NuvioTheme.spacing.xxs, vertical = NuvioTheme.spacing.sm + NuvioTheme.spacing.xxs),
+                .padding(horizontal = NuvioTheme.spacing.lg - NuvioTheme.spacing.xxs, vertical = 7.dp), // Live TV fork: slimmer items, so every page fits in the one menu
             verticalAlignment = Alignment.CenterVertically
         ) {
         Box(

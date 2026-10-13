@@ -1234,6 +1234,25 @@ private fun PlaybackNavHost(
                 androidx.hilt.navigation.compose.hiltViewModel(backStackEntry)
             SearchScreen(
                 viewModel = searchViewModel,
+                // Live TV fork: the On Demand row (your provider's own titles).
+                onOpenOnDemand = { itemId, itemType, addonBaseUrl, onDemandUid ->
+                    navController.navigate(Screen.Detail.createRoute(itemId, itemType, addonBaseUrl))
+                    navController.currentBackStackEntry?.savedStateHandle?.set(
+                        com.nuvio.tv.livetv.ondemand.OnDemandPlay.KEY, onDemandUid
+                    )
+                },
+                onPlayOnDemand = { url, title, type, poster ->
+                    navController.navigate(
+                        Screen.Player.createRoute(
+                            streamUrl = url,
+                            title = title,
+                            contentType = type,
+                            contentName = title,
+                            poster = poster,
+                            addonName = com.nuvio.tv.livetv.ondemand.OnDemandStreams.GROUP_NAME
+                        )
+                    )
+                },
                 onOpenLiveTv = {
                     // Put the guide underneath, so Back from full screen lands on the guide
                     // with this channel highlighted (not back in search).
@@ -1386,7 +1405,11 @@ private fun PlaybackNavHost(
                 },
                 // Search goes to Nuvio's own search (results open the usual details page, where
                 // your provider's copies are offered too).
-                onOpenSearch = { navController.navigate(Screen.Search.route) { launchSingleTop = true } }
+                onOpenSearch = {
+                    // What this search shows is set for On Demand in Live TV settings.
+                    com.nuvio.tv.livetv.ui.LiveTvSearchBridge.origin.value = com.nuvio.tv.livetv.ui.LiveTvSearchBridge.ON_DEMAND
+                    navController.navigate(Screen.Search.route) { launchSingleTop = true }
+                }
             )
         }
 

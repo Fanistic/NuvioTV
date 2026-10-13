@@ -296,6 +296,12 @@ fun LiveTvGuideScreen(
         else -> ui.channels
     }
     val selectedGroupTitle = ui.groups.firstOrNull { it.id == ui.selectedGroupId }?.title ?: "All channels"
+    // The group on screen gets its listings for every day ahead (Guide Days Ahead), in the
+    // background, so scrolling ahead in it doesn't run out after half a day.
+    LaunchedEffect(ui.selectedGroupId, ui.channels.size) {
+        delay(400) // flicking through groups: only the one you stop on
+        viewModel.ensureGroupFullRange(ui.channels.map { it.key })
+    }
 
     // A different group opens at its top. (It used to jump to the playing channel when that
     // channel was in the group too, e.g. after playing it from Favorites.) Opening Live TV and
@@ -902,7 +908,7 @@ fun LiveTvGuideScreen(
                             pinGroup = g
                             pinWrong = false
                         } else if (g.id == ChannelGroup.SEARCH) {
-                            LiveTvSearchBridge.liveOnly.value = true
+                            LiveTvSearchBridge.origin.value = LiveTvSearchBridge.GUIDE
                             onOpenNuvioSearch()
                         } else {
                             if (g.id != ui.selectedGroupId) {
@@ -1157,7 +1163,7 @@ fun LiveTvGuideScreen(
                                         focusedChannel?.let { menuTarget = MenuTarget(it, focusedBlock) }
                                         true
                                     }
-                                            event.key == Key.Search -> { LiveTvSearchBridge.liveOnly.value = true; onOpenNuvioSearch(); true }
+                                            event.key == Key.Search -> { LiveTvSearchBridge.origin.value = LiveTvSearchBridge.GUIDE; onOpenNuvioSearch(); true }
                                     code in android.view.KeyEvent.KEYCODE_0..android.view.KeyEvent.KEYCODE_9 -> {
                                         if (numberBuffer.length < 5) numberBuffer += (code - android.view.KeyEvent.KEYCODE_0).toString()
                                         true
@@ -1557,7 +1563,7 @@ fun LiveTvGuideScreen(
                 onProgramInfo = { menuTarget = null; infoTarget = target },
                 streamProgram = target.block?.program ?: viewModel.currentProgram(target.channel.key),
                 onFindInNuvio = { p -> menuTarget = null; findInNuvio(p) },
-                onSearch = { menuTarget = null; LiveTvSearchBridge.liveOnly.value = true; onOpenNuvioSearch() },
+                onSearch = { menuTarget = null; LiveTvSearchBridge.origin.value = LiveTvSearchBridge.GUIDE; onOpenNuvioSearch() },
                 onRefresh = { menuTarget = null; viewModel.refresh() },
                 onSettings = { menuTarget = null; onOpenSettings() }
             )

@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -254,7 +255,11 @@ data class DrawerItem(
     /** A small red dot (something is recording). */
     val badge: Boolean = false,
     /** The name shown in the small floating menu pill, when not [label]. */
-    val pillLabel: String? = null
+    val pillLabel: String? = null,
+    /** A thin line above this item (it starts a new part of the menu). */
+    val sectionStart: Boolean = false,
+    /** Kept at the bottom of the menu, below the rest (Settings). */
+    val pinnedBottom: Boolean = false
 )
 
 /** Live TV fork: the menu entry that holds Guide, On Demand and Recordings. */
@@ -1077,36 +1082,19 @@ open class MainActivity : ComponentActivity() {
                     val onDemandHasContent = remember { onDemandRepository.also { it.start() }.hasContent }
                         .collectAsState().value
                     val onDemandInSidebar = onDemandHasContent && liveTvSettingsNow.onDemandInSidebar
-                    // Live TV fork: Recordings has its own menu entry once there's anything recorded.
+                    // Live TV fork: Recordings has its own menu entry once there's anything recorded
+                    // (and it's not switched off in Live TV settings).
                     val allRecordings = liveTvRecorder.recordings.collectAsState().value
-                    val recordingsInSidebar = allRecordings.isNotEmpty() ||
+                    val recordingsInSidebar = liveTvSettingsNow.recordingsInSidebar && (allRecordings.isNotEmpty() ||
                         liveTvRecordingScheduler.schedules.collectAsState().value.isNotEmpty() ||
-                        liveTvRecordingScheduler.series.collectAsState().value.isNotEmpty()
+                        liveTvRecordingScheduler.series.collectAsState().value.isNotEmpty())
                     val recordingNow = allRecordings.any {
                         it.status == com.nuvio.tv.livetv.record.RecordingStatus.RECORDING
                     }
-                    // Live TV fork: Guide, On Demand and Recordings sit in their own list, opened
-                    // from one "Live TV" entry. The menu opens straight to that list while you're on
-                    // one of its pages, and goes back to the main menu when it closes.
-                    val liveTvGroupRoutes = remember {
-                        listOf(Screen.LiveTv.route, Screen.OnDemand.route, Screen.Recordings.route)
-                    }
-                    val onLiveTvGroupPage = liveTvGroupRoutes.any {
-                        currentRoute == it || currentRoute?.startsWith("$it/") == true
-                    }
+                    // (The Live TV sub-list is gone: every page is in the one menu again. These stay
+                    // so the menus' wiring is unchanged; nothing opens a sub-list any more.)
                     var liveTvGroupOpen by remember { mutableStateOf(false) }
-                    // Whether the side menu is open right now.
                     var sidebarOpenNow by remember { mutableStateOf(false) }
-                    // Which list the menu will open on is settled while it's closed (on a Live TV
-                    // page: the Live TV list), so opening it never swaps one list for the other
-                    // mid-open. That swap made the menu flicker open and shut several times.
-                    // The classic menu opens on the main list and the Live TV list opens from it:
-                    // that menu closes the moment the highlight isn't on one of its items, and
-                    // changing lists as it opened left it with nothing highlighted, so it closed
-                    // and opened again several times.
-                    LaunchedEffect(onLiveTvGroupPage, modernSidebarEnabled) {
-                        if (!sidebarOpenNow) liveTvGroupOpen = modernSidebarEnabled && onLiveTvGroupPage
-                    }
                     val rootRoutes = remember(discoverLocation, liveTvInSidebar, onDemandInSidebar) {
                         buildSet {
                             add(Screen.Home.route)
@@ -1130,6 +1118,8 @@ open class MainActivity : ComponentActivity() {
                     val strNavSearch = stringResource(R.string.nav_search)
                     val strNavLibrary = stringResource(R.string.nav_library)
                     val strNavSettings = stringResource(R.string.nav_settings)
+                    // Live TV fork: every page in one menu, in three parts: Nuvio's pages, then the
+                    // Live TV pages after a thin line, then Settings at the bottom.
                     val drawerItems = remember(
                         strNavHome,
                         strNavDiscover,
@@ -1140,64 +1130,9 @@ open class MainActivity : ComponentActivity() {
                         liveTvInSidebar,
                         onDemandInSidebar,
                         recordingsInSidebar,
-                        recordingNow,
-                        liveTvGroupOpen,
-                        modernSidebarEnabled,
-                        sidebarOpenNow
+                        recordingNow
                     ) {
                         buildList {
-                            // Live TV fork: the pages in the Live TV list.
-                            val liveTvPages = buildList {
-                                if (liveTvInSidebar) {
-                                    add(
-                                        DrawerItem(
-                                            route = Screen.LiveTv.route,
-                                            label = "Guide",
-                                            icon = Icons.Default.GridView,
-                                            isChild = true,
-                                            pillLabel = "Live TV"
-                                        )
-                                    )
-                                }
-                                if (onDemandInSidebar) {
-                                    add(
-                                        DrawerItem(
-                                            route = Screen.OnDemand.route,
-                                            label = "On Demand",
-                                            icon = Icons.Default.VideoLibrary,
-                                            isChild = true
-                                        )
-                                    )
-                                }
-                                if (recordingsInSidebar) {
-                                    add(
-                                        DrawerItem(
-                                            route = Screen.Recordings.route,
-                                            label = "Recordings",
-                                            icon = Icons.Default.RadioButtonChecked,
-                                            isChild = true,
-                                            badge = recordingNow
-                                        )
-                                    )
-                                }
-                            }
-                            // Live TV fork: the menu shows the Live TV list in place of the main
-                            // menu (back to it with Back or the "‹ Live TV" row), so it's never
-                            // taller than the main menu.
-                            // The classic menu shows its icons while closed: keep the main ones there.
-                            if (liveTvPages.size >= 2 && liveTvGroupOpen && (modernSidebarEnabled || sidebarOpenNow)) {
-                                add(
-                                    DrawerItem(
-                                        route = LIVE_TV_GROUP_ROUTE,
-                                        label = "Live TV",
-                                        icon = Icons.Default.ChevronLeft,
-                                        isGroup = true,
-                                        groupOpen = true
-                                    )
-                                )
-                                addAll(liveTvPages)
-                                return@buildList
-                            }
                             add(
                                 DrawerItem(
                                     route = Screen.Home.route,
@@ -1214,31 +1149,6 @@ open class MainActivity : ComponentActivity() {
                                     )
                                 )
                             }
-                            // Live TV fork: one "Live TV" entry that opens its own list.
-                            if (liveTvPages.size >= 2) {
-                                add(
-                                    DrawerItem(
-                                        route = LIVE_TV_GROUP_ROUTE,
-                                        label = "Live TV",
-                                        icon = Icons.Default.LiveTv,
-                                        isGroup = true,
-                                        badge = recordingNow
-                                    )
-                                )
-                            } else {
-                                // Only one of them to show: a plain entry, no list.
-                                liveTvPages.firstOrNull()?.let { only ->
-                                    val isGuide = only.route == Screen.LiveTv.route
-                                    add(
-                                        only.copy(
-                                            label = if (isGuide) "Live TV" else only.label,
-                                            icon = if (isGuide) Icons.Default.LiveTv else only.icon,
-                                            isChild = false,
-                                            pillLabel = null
-                                        )
-                                    )
-                                }
-                            }
                             add(
                                 DrawerItem(
                                     route = Screen.Search.route,
@@ -1253,11 +1163,31 @@ open class MainActivity : ComponentActivity() {
                                     iconRes = R.raw.sidebar_library
                                 )
                             )
+                            val liveTvPages = buildList {
+                                if (liveTvInSidebar) {
+                                    add(DrawerItem(route = Screen.LiveTv.route, label = "Live TV", icon = Icons.Default.LiveTv))
+                                }
+                                if (onDemandInSidebar) {
+                                    add(DrawerItem(route = Screen.OnDemand.route, label = "On Demand", icon = Icons.Default.VideoLibrary))
+                                }
+                                if (recordingsInSidebar) {
+                                    add(
+                                        DrawerItem(
+                                            route = Screen.Recordings.route,
+                                            label = "Recordings",
+                                            icon = Icons.Default.RadioButtonChecked,
+                                            badge = recordingNow
+                                        )
+                                    )
+                                }
+                            }
+                            liveTvPages.forEachIndexed { i, page -> add(if (i == 0) page.copy(sectionStart = true) else page) }
                             add(
                                 DrawerItem(
                                     route = Screen.Settings.route,
                                     label = strNavSettings,
-                                    iconRes = R.raw.sidebar_settings
+                                    iconRes = R.raw.sidebar_settings,
+                                    pinnedBottom = true
                                 )
                             )
                         }
@@ -1265,9 +1195,6 @@ open class MainActivity : ComponentActivity() {
                     val selectedDrawerRoute = drawerItems.firstOrNull { item ->
                         currentRoute == item.route || currentRoute?.startsWith("${item.route}/") == true
                     }?.route
-                        // Live TV fork: on one of the Live TV pages with its group closed, the
-                        // group's heading is the one marked.
-                        ?: LIVE_TV_GROUP_ROUTE.takeIf { onLiveTvGroupPage && drawerItems.any { it.isGroup } }
                     val selectedDrawerItem = drawerItems.firstOrNull { it.route == selectedDrawerRoute } ?: drawerItems.first()
 
                     val confirmExitEnabled by profileManager.confirmExitEnabled.collectAsState()
@@ -1347,7 +1274,7 @@ open class MainActivity : ComponentActivity() {
                                     onSidebarExpandedChange = { expanded ->
                                         sidebarOpenNow = expanded
                                         // Closed: ready for next time (unchanged when opening).
-                                        if (!expanded) liveTvGroupOpen = modernSidebarEnabled && onLiveTvGroupPage
+                                        if (!expanded) liveTvGroupOpen = false
                                     }
                                 )
                             } else {
@@ -1372,7 +1299,7 @@ open class MainActivity : ComponentActivity() {
                                     onSidebarExpandedChange = { expanded ->
                                         sidebarOpenNow = expanded
                                         // Closed: ready for next time (unchanged when opening).
-                                        if (!expanded) liveTvGroupOpen = modernSidebarEnabled && onLiveTvGroupPage
+                                        if (!expanded) liveTvGroupOpen = false
                                     }
                                 )
                             }
@@ -1782,16 +1709,23 @@ private fun LegacySidebarScaffold(
                         }
                     }
 
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .offset(y = 28.dp)
-                            .fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                        horizontalAlignment = Alignment.Start
-                    ) {
-                        drawerItems.forEach { item ->
-                            key(item.route) {
+                    // Live TV fork: every page in one menu. Slimmer items, a thin line between
+                    // Nuvio's pages and the Live TV pages, Settings kept at the bottom, and the
+                    // list starts below the logo (scrolling if it ever doesn't fit) instead of
+                    // being centred, which grew up into the logo as pages were added.
+                    val renderItem: @Composable (DrawerItem) -> Unit = { item ->
+                        key(item.route) {
+                            Column {
+                                if (item.sectionStart) {
+                                    Box(
+                                        Modifier
+                                            .offset(x = NuvioTheme.spacing.md)
+                                            .width(itemWidth)
+                                            .padding(horizontal = 12.dp, vertical = 5.dp)
+                                            .height(1.dp)
+                                            .background(Color.White.copy(alpha = 0.14f))
+                                    )
+                                }
                                 LegacySidebarButton(
                                     label = item.label,
                                     iconRes = item.iconRes,
@@ -1799,14 +1733,8 @@ private fun LegacySidebarScaffold(
                                     selected = selectedDrawerRoute == item.route,
                                     expanded = isExpanded,
                                     badge = item.badge,
-                                    trailingIcon = if (item.isGroup && !item.groupOpen) Icons.Default.ChevronRight else null,
-                                    onClick = onClick@{
-                                        // Live TV fork: Live TV opens its list; its "‹ Live TV" row goes back.
-                                        if (item.isGroup) {
-                                            if (!item.groupOpen) pendingLiveTvListFocus = true
-                                            onToggleLiveTvGroup()
-                                            return@onClick
-                                        }
+                                    trailingIcon = null,
+                                    onClick = {
                                         keyboardController?.hide()
                                         onNavigate(item.route)
                                         navigateToDrawerRoute(
@@ -1823,9 +1751,34 @@ private fun LegacySidebarScaffold(
                                         .width(itemWidth)
                                         .offset(x = NuvioTheme.spacing.md)
                                 )
+                            }
                         }
                     }
-                }
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .fillMaxSize()
+                            .padding(top = 92.dp, bottom = 8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
+                                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                                // Room for the highlighted item, which grows a little.
+                                .padding(vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalAlignment = Alignment.Start
+                        ) {
+                            drawerItems.filter { !it.pinnedBottom }.forEach { renderItem(it) }
+                        }
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            horizontalAlignment = Alignment.Start
+                        ) {
+                            drawerItems.filter { it.pinnedBottom }.forEach { renderItem(it) }
+                        }
+                    }
             }
         }
         }
@@ -1962,7 +1915,8 @@ private fun LegacySidebarButton(
     Card(
         onClick = onClick,
         modifier = modifier
-            .height(NuvioComponents.tokens.sidebar.itemHeight)
+            // Live TV fork: slimmer items, so every page fits in the one menu.
+            .height(42.dp)
             .graphicsLayer {
                 scaleX = itemScale
                 scaleY = itemScale
