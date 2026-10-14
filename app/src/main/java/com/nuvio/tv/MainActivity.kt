@@ -113,6 +113,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import com.nuvio.tv.ui.screens.ambient.AmbientIdleController
+import com.nuvio.tv.ui.screens.ambient.AmbientModeHost
+import com.nuvio.tv.ui.screens.ambient.LocalAmbientIdleController
 import com.nuvio.tv.ui.components.LocalStartupLoadingState
 import com.nuvio.tv.ui.components.LocalStartupSplashEnabled
 import com.nuvio.tv.ui.components.StartupLoadingState
@@ -747,6 +750,7 @@ open class MainActivity : ComponentActivity() {
                     LocalLandscapePosterMode provides mainUiPrefs.landscapePosterMode,
                     LocalAlwaysBackdropWithLogo provides mainUiPrefs.alwaysBackdropWithLogo,
                     LocalMemberAccess provides mainUiPrefs.memberAccess,
+                    LocalAmbientIdleController provides ambientIdleController,
                     com.nuvio.tv.core.player.LocalTrailerPlayerPool provides trailerPlayerPool,
                     LocalSplashBackground provides splashBackground,
                     LocalStartupLoadingState provides startupLoadingState,
@@ -1316,6 +1320,12 @@ open class MainActivity : ComponentActivity() {
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
+
+                            AmbientModeHost(
+                                controller = ambientIdleController,
+                                allowed = currentRoute?.startsWith("player/") != true && autoNextOverlay == null,
+                                onShown = { trailerPlayerPool.stop() }
+                            )
                         }
                     }
                 } 
@@ -1375,6 +1385,7 @@ open class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        ambientIdleController.dismiss()
         if (::jankStats.isInitialized) jankStats.isTrackingEnabled = true
         memberAccessRepository.refreshIfStale()
         lifecycleScope.launch {
@@ -1424,6 +1435,13 @@ open class MainActivity : ComponentActivity() {
     // held Back key don't cascade through Compose BackHandlers (e.g. opening the sidebar
     // and then immediately exiting the app).
     val longPressBackHeld = mutableStateOf(false)
+
+    private val ambientIdleController = AmbientIdleController()
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        ambientIdleController.onInteraction()
+    }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Live TV fork: remember when the remote was last used (the home screen's Live TV row
