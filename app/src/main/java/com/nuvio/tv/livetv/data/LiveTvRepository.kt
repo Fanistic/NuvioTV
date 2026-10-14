@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -101,6 +102,10 @@ class LiveTvRepository @Inject constructor(
         scope.launch {
             // Saved channels and guide first: reading them only uses the device's storage.
             loadFromCache()
+            // Groups hidden or shown since the guide was stored (and from now on).
+            watchHidden()
+            // Space left empty in the guide database by earlier versions or updates.
+            scheduleCompact()
             // Checking for playlist / guide updates uses the network and a lot of processing,
             // so when this starts with the app it waits a little, out of Nuvio's way.
             if (updateCheckDelayMs > 0) delay(updateCheckDelayMs)
@@ -492,6 +497,8 @@ class LiveTvRepository @Inject constructor(
         }
 
         val epgTargets = collectEpgTargets()
+        // Files saved by earlier versions, unzipped: zipped once (see download()).
+        (epgTargets.map { epgFile(it.fileId) } + playlists.map { playlistFile(it.id) }).forEach { zipInPlace(it) }
         for (target in epgTargets) {
             outOfTheWay()
             val file = epgFile(target.fileId)
@@ -690,6 +697,87 @@ class LiveTvRepository @Inject constructor(
 
     /** Assign EPG needs the full guide-channel lists, which the saved guide skips. */
     @Volatile private var epgDetailsPending = false
+
+    // ---------------------------------------------------------------- hidden channels
+
+    /** The channels the stored guide left out (hidden in every profile), as last stored. */
+    private val skippedFile get() = File(baseDir, "guide_skipped.txt")
+    @Volatile private var guideSkipped: Set<String>? = null
+
+    private fun saveSkipped(keys: Set<String>) {
+        guideSkipped = keys
+        runCatching {
+            val tmp = File(baseDir, skippedFile.name + ".tmp")
+            java.io.DataOutputStream(java.io.BufferedOutputStream(java.util.zip.GZIPOutputStream(tmp.outputStream()))).use { out ->
+                out.writeInt(keys.size)
+                keys.forEach { out.writeUTF(it) }
+            }
+            if (!tmp.renameTo(skippedFile)) { tmp.copyTo(skippedFile, overwrite = true); tmp.delete() }
+        }
+    }
+
+    /** Null for a guide stored before channels were left out (it has everything). */
+    private fun loadSkipped(): Set<String>? = guideSkipped ?: runCatching {
+        if (!skippedFile.exists()) return@runCatching null
+        java.io.DataInputStream(java.io.BufferedInputStream(java.util.zip.GZIPInputStream(skippedFile.inputStream()))).use { input ->
+            HashSet<String>().apply { repeat(input.readInt()) { add(input.readUTF()) } }
+        }
+    }.getOrNull()?.also { guideSkipped = it }
+
+    private var hiddenWatch: kotlinx.coroutines.Job? = null
+
+    /** Follows hiding and showing groups and channels (in any profile) once the guide is loaded. */
+    private fun watchHidden() {
+        if (hiddenWatch != null) return
+        hiddenWatch = scope.launch {
+            prefs.hiddenEverywhere.collectLatest {
+                delay(2_000) // a few changes in a row are handled together
+                // Once started, finished (a newer change waits its turn instead of cutting it short).
+                withContext(kotlinx.coroutines.NonCancellable) { mutex.withLock { syncHidden() } }
+            }
+        }
+    }
+
+    /**
+     * Keeps the stored guide in step with what's hidden everywhere:
+     *  - newly hidden channels: their listings are deleted (nothing is read);
+     *  - channels shown again: the guide is read from the saved guide files, so they get listings.
+     */
+    private suspend fun syncHidden() = withContext(Dispatchers.IO) {
+        if (!guideInDb) return@withContext
+        val channels = _channels.value
+        if (channels.isEmpty()) return@withContext
+        val hidden = prefs.currentHiddenEverywhere()
+        val nowHidden = channels.filter { hidden.hides(it.key, it.groupId) }.mapTo(HashSet()) { it.key }
+        val skipped = loadSkipped() ?: emptySet() // older guides stored every channel
+        val keys = channels.mapTo(HashSet()) { it.key }
+        val shownAgain = skipped.filter { it in keys && it !in nowHidden }
+        if (shownAgain.isNotEmpty()) {
+            LIVE_REPORT.add("Guide: ${shownAgain.size} channels shown again, reading their listings")
+            setStatus(loading = true, message = "Updating guide…")
+            buildPrograms(prefs.currentSettings(), collectEpgTargets())
+            _status.value = LiveTvStatus(loading = false, loadedOnce = true)
+            return@withContext
+        }
+        val newlyHidden = nowHidden - skipped
+        if (newlyHidden.isEmpty()) return@withContext
+        runCatching { guideDb.deleteChannels(newlyHidden) }.onFailure { Log.w(TAG, "Couldn't drop hidden listings", it) }
+        _programs.value = _programs.value - newlyHidden
+        saveSkipped(skipped.filterTo(HashSet()) { it in keys } + newlyHidden)
+        scheduleCompact()
+    }
+
+    private var compactJob: kotlinx.coroutines.Job? = null
+
+    /** Gives the guide database's empty space back, a little after a big change, out of the way. */
+    private fun scheduleCompact() {
+        compactJob?.cancel()
+        compactJob = scope.launch {
+            delay(30_000)
+            BackgroundWork.awaitIdle()
+            mutex.withLock { withContext(Dispatchers.IO) { guideDb.compact() } }
+        }
+    }
 
     /** Builds the full guide details (for Assign EPG) if the saved guide was used. */
     fun ensureEpgDetails() {
@@ -1196,7 +1284,7 @@ class LiveTvRepository @Inject constructor(
             val file = playlistFile(pl.id)
             if (!file.exists()) continue
             setStatus(loading = true, message = "Reading channels from \"${pl.name}\"" + (if (playlists.size > 1) " (${plIndex + 1} of ${playlists.size})" else "") + "…")
-            val parsed = runCatching { file.bufferedReader().use { M3uParser.parse(it) } }
+            val parsed = runCatching { openMaybeGzip(file).bufferedReader().use { M3uParser.parse(it) } }
                 .onFailure { Log.w(TAG, "Parse ${pl.name} failed", it) }
                 .getOrNull() ?: continue
             embeddedEpgUrls[pl.id] = parsed.epgUrls
@@ -1246,11 +1334,17 @@ class LiveTvRepository @Inject constructor(
     }
 
     private suspend fun buildProgramsInner(settings: LiveTvSettings, targets: List<EpgTarget>) = withContext(Dispatchers.IO) {
-        val channels = _channels.value
-        if (channels.isEmpty()) {
+        val all = _channels.value
+        if (all.isEmpty()) {
             _programs.value = emptyMap()
             return@withContext
         }
+        // Channels no profile shows (hidden, or in a hidden group, in every profile) get no
+        // listings: nobody sees them, and big providers' hidden groups made the guide database
+        // many times bigger than what's watched. Showing them again reads their listings back.
+        val hidden = prefs.currentHiddenEverywhere()
+        val skipped = HashSet<String>()
+        val channels = all.filter { c -> (!hidden.hides(c.key, c.groupId)).also { shown -> if (!shown) skipped += c.key } }
         val now = System.currentTimeMillis()
         val windowStart = now - settings.epgPastHours.coerceAtLeast(1) * HOUR
         val windowEnd = now + settings.epgFutureDays.coerceAtLeast(1) * 24 * HOUR
@@ -1404,6 +1498,9 @@ class LiveTvRepository @Inject constructor(
             loadedFrom = from
             loadedTo = to
             guideInDb = true
+            saveSkipped(skipped)
+            if (skipped.isNotEmpty()) LIVE_REPORT.add("Guide: ${skipped.size} hidden channels left out")
+            scheduleCompact()
         } else {
             guideInDb = false
             loadedFrom = Long.MIN_VALUE
@@ -1627,8 +1724,16 @@ class LiveTvRepository @Inject constructor(
             val tmp = File(target.parentFile, target.name + ".tmp")
             // With a label: how much has come in so far, so a big download doesn't look frozen.
             val total = body.contentLength().takeIf { it > 0 }
-            body.byteStream().use { input ->
-                tmp.outputStream().use { out ->
+            body.byteStream().use { raw ->
+                // Saved zipped: guide files (XMLTV) and big playlists shrink to about a tenth,
+                // and plain guides of several hundred MB made the app take up close to 1 GB.
+                // Ones that already arrive zipped (.xml.gz) are kept as they are.
+                val input = BufferedInputStream(raw, 64 * 1024)
+                input.mark(2)
+                val alreadyZipped = input.read() == 0x1f && input.read() == 0x8b
+                input.reset()
+                val fileOut = tmp.outputStream()
+                (if (alreadyZipped) fileOut else fastGzip(fileOut)).use { out ->
                     val buf = ByteArray(64 * 1024)
                     var read = 0L
                     var shownAt = 0L
@@ -1887,6 +1992,31 @@ class LiveTvRepository @Inject constructor(
         502, 503, 504, 520, 521, 522, 523, 524 -> "HTTP $code: the provider's server didn't respond, try again later"
         884 -> "HTTP 884: the provider blocked this app (try setting a user agent)"
         else -> "HTTP $code"
+    }
+
+    /** A zip stream at the fastest setting: a TV box's processor matters more than the last few MB. */
+    private fun fastGzip(out: java.io.OutputStream): java.io.OutputStream =
+        object : java.util.zip.GZIPOutputStream(java.io.BufferedOutputStream(out, 64 * 1024), 64 * 1024) {
+            init { def.setLevel(java.util.zip.Deflater.BEST_SPEED) }
+        }
+
+    /**
+     * Zips a saved guide or playlist that isn't zipped yet. Its "last changed" stamp is kept, so
+     * this doesn't count as new content (the saved guide is read again once, as its size changed).
+     */
+    private fun zipInPlace(file: File) {
+        runCatching {
+            if (!file.exists() || file.length() < 1024 * 1024) return
+            val zipped = file.inputStream().use { val a = it.read(); val b = it.read(); a == 0x1f && b == 0x8b }
+            if (zipped) return
+            val tmp = File(file.parentFile, file.name + ".zip.tmp")
+            file.inputStream().use { input -> fastGzip(tmp.outputStream()).use { out -> input.copyTo(out, 64 * 1024) } }
+            val modified = file.lastModified()
+            if (!stampFile(file).exists()) markChanged(file)
+            if (!tmp.renameTo(file)) { tmp.copyTo(file, overwrite = true); tmp.delete() }
+            file.setLastModified(modified)
+            LIVE_REPORT.add("Saved \"${file.name}\" zipped to save space")
+        }.onFailure { Log.w(TAG, "Couldn't zip ${file.name}", it) }
     }
 
     private fun openMaybeGzip(file: File, onProgress: ((Long) -> Unit)? = null): InputStream {

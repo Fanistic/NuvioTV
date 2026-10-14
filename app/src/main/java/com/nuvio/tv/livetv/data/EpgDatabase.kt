@@ -250,6 +250,22 @@ class EpgDatabase @Inject constructor(@ApplicationContext context: Context) :
         }
     }
 
+    /** Drops these channels' listings (channels hidden in every profile). */
+    fun deleteChannels(channels: Collection<String>) {
+        if (channels.isEmpty()) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            channels.forEach { ch -> db.delete("programs", "ch = ?", arrayOf(ch)) }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** Gives back space left empty by deleted listings (see [SqliteCompact]). */
+    fun compact(): Long = SqliteCompact.compactIfWasteful(writableDatabase, "guide")
+
     fun clear() {
         val db = writableDatabase
         db.delete("programs", null, null)

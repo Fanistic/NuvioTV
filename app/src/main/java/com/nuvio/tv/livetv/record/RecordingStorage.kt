@@ -45,11 +45,75 @@ object RecordingStorage {
                 totalBytes = runCatching { base.totalSpace }.getOrDefault(0L)
             )
         }
+        // Drives Android has mounted but didn't hand the app a folder on in the list above. That
+        // folder is made on first ask, and on some boxes the first ask after plugging a drive in
+        // (or for big, slow-to-wake drives) comes back empty; asking for the drive's folder
+        // directly usually works.
+        for (vol in volumes(sm)) {
+            if (vol.isPrimary || !vol.isRemovable) continue
+            if (vol.state != Environment.MEDIA_MOUNTED) continue
+            val id = vol.uuid ?: continue
+            if (out.any { it.id == id }) continue
+            val base = appFolderOn(context, vol) ?: continue
+            out += Choice(
+                id = id,
+                label = runCatching { vol.getDescription(context) }.getOrNull()?.takeIf { it.isNotBlank() } ?: "USB Drive",
+                dir = File(base, "recordings"),
+                freeBytes = runCatching { base.usableSpace }.getOrDefault(0L),
+                totalBytes = runCatching { base.totalSpace }.getOrDefault(0L)
+            )
+        }
         if (out.none { it.isDevice }) {
             val f = File(context.filesDir, "recordings")
             out.add(0, Choice("", "This Device", f, runCatching { context.filesDir.usableSpace }.getOrDefault(0L), runCatching { context.filesDir.totalSpace }.getOrDefault(0L)))
         }
         return out.distinctBy { it.id }
+    }
+
+    /** A drive Android can see but recordings can't go to, and why (shown in the drive list). */
+    data class Problem(val label: String, val reason: String)
+
+    /**
+     * Drives plugged in that can't be used, with the reason, so the drive list can say why one
+     * is missing instead of just leaving it out.
+     */
+    fun problems(context: Context): List<Problem> {
+        val sm = context.getSystemService(Context.STORAGE_SERVICE) as? StorageManager
+        val usable = choices(context).map { it.id }.toSet()
+        return volumes(sm).filter { it.isRemovable && !it.isPrimary && (it.uuid == null || it.uuid !in usable) }
+            .mapNotNull { vol ->
+                val label = runCatching { vol.getDescription(context) }.getOrNull()?.takeIf { it.isNotBlank() } ?: "USB Drive"
+                val reason = when (vol.state) {
+                    Environment.MEDIA_MOUNTED_READ_ONLY ->
+                        "Read only. This box can read the drive but not write to it (usually an NTFS drive). Formatting it as exFAT lets you record to it."
+                    Environment.MEDIA_UNMOUNTABLE, Environment.MEDIA_NOFS ->
+                        "This box can't read the drive's format. Formatting it as exFAT usually fixes this."
+                    Environment.MEDIA_CHECKING, Environment.MEDIA_UNMOUNTED, Environment.MEDIA_EJECTING ->
+                        "Not ready yet. Wait a moment and open this list again."
+                    Environment.MEDIA_MOUNTED ->
+                        "Android didn't give the app a folder on it. Unplug the drive and plug it back in, or restart the box."
+                    Environment.MEDIA_REMOVED, Environment.MEDIA_BAD_REMOVAL -> null
+                    else -> "Not usable right now (${vol.state})."
+                } ?: return@mapNotNull null
+                Problem(label, reason)
+            }
+    }
+
+    private fun volumes(sm: StorageManager?): List<android.os.storage.StorageVolume> =
+        runCatching { sm?.storageVolumes.orEmpty() }.getOrDefault(emptyList())
+
+    /** The app's own folder on a drive (no permission needed), made if it isn't there yet. */
+    private fun appFolderOn(context: Context, vol: android.os.storage.StorageVolume): File? {
+        // Asking again often makes the folder the first ask didn't.
+        runCatching { context.getExternalFilesDirs(null).toList() }.getOrNull()?.forEach { base ->
+            if (base != null && runCatching { (context.getSystemService(Context.STORAGE_SERVICE) as StorageManager).getStorageVolume(base)?.uuid }.getOrNull() == vol.uuid) {
+                return base
+            }
+        }
+        if (android.os.Build.VERSION.SDK_INT < 30) return null
+        val root = runCatching { vol.directory }.getOrNull() ?: return null
+        val dir = File(root, "Android/data/${context.packageName}/files")
+        return dir.takeIf { runCatching { (it.isDirectory || it.mkdirs()) && it.canWrite() }.getOrDefault(false) }
     }
 
     /** The place for [id], or this device if that drive isn't plugged in. */

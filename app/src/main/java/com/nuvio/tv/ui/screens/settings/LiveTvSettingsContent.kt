@@ -1033,6 +1033,7 @@ fun LiveTvSettingsContent(
                 val recContext = androidx.compose.ui.platform.LocalContext.current
                 // Drives come and go: read again whenever the section is opened.
                 val drives = remember("recordings" in open) { com.nuvio.tv.livetv.record.RecordingStorage.choices(recContext) }
+                val driveProblems = remember("recordings" in open) { com.nuvio.tv.livetv.record.RecordingStorage.problems(recContext) }
                 val chosen = drives.firstOrNull { it.id == s.recordingStorage }
                 fun driveLabel(c: com.nuvio.tv.livetv.record.RecordingStorage.Choice) =
                     c.label + " · " + com.nuvio.tv.livetv.record.RecordingStorage.sizeLabel(c.freeBytes) + " free"
@@ -1079,7 +1080,26 @@ fun LiveTvSettingsContent(
                                 pickingDrive = false
                                 update { it.copy(recordingStorage = c.id) }
                             }
-                        },
+                        } + driveProblems.map { p ->
+                            // Plugged in but not usable: say why instead of leaving it out.
+                            "${p.label} · Can't be used" to {
+                                pickingDrive = false
+                                confirm("${p.label} Can't Be Used", p.reason, "OK") { }
+                            }
+                        } + listOf(
+                            "Drive Not Listed?" to {
+                                pickingDrive = false
+                                confirm(
+                                    "Drive Not Listed?",
+                                    "Android itself hasn't found the drive. Check that the box shows it in its own settings (Storage). " +
+                                        "Large drives often need more power than a TV box's USB port gives: use a drive with its own " +
+                                        "power supply or a powered USB hub. The drive should be formatted as exFAT (NTFS is read only " +
+                                        "on many boxes, and FAT32 can't hold files over 4 GB). Don't set it up as \"device storage\": " +
+                                        "use it as removable storage.",
+                                    "OK"
+                                ) { }
+                            }
+                        ),
                         onDismiss = { pickingDrive = false }
                     )
                 }

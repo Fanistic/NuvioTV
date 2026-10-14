@@ -1447,6 +1447,7 @@ open class MainActivity : ComponentActivity() {
         // Live TV fork: remember when the remote was last used (the home screen's Live TV row
         // only claims the first highlight while nobody has pressed anything yet).
         if (event.action == KeyEvent.ACTION_DOWN) com.nuvio.tv.livetv.home.LiveTvHomeFocus.lastKeyAt = android.os.SystemClock.uptimeMillis()
+        if (ambientIdleController.consumeKeyEvent(event)) return true
         if (event.keyCode == KeyEvent.KEYCODE_BACK) {
             if (longPressBackHeld.value) {
                 if (event.action == KeyEvent.ACTION_UP) longPressBackHeld.value = false

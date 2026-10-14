@@ -154,6 +154,9 @@ class OnDemandRepository @Inject constructor(
             kotlinx.coroutines.delay(START_DELAY_MS)
             // Release years for titles imported before years were read from their names.
             runCatching { db.fillMissingYears() }
+            // Space freed since last time (a playlist removed, smaller catalogs) back to the box.
+            com.nuvio.tv.livetv.data.BackgroundWork.awaitIdle()
+            runCatching { db.compact() }
             // Learn each provider's title tags (for catalogs imported before this existed).
             runCatching {
                 db.loadPrefixes()

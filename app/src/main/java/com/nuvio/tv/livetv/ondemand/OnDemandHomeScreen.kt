@@ -107,10 +107,11 @@ fun OnDemandHomeScreen(
     // On Demand's own trailer player. The app's shared one belongs to Home: sharing it meant the
     // same player was attached to both pages while going back, and Android closed the app.
     val ownPool = remember {
+        val entry = dagger.hilt.android.EntryPointAccessors.fromApplication(context.applicationContext, OnDemandPlayerEntryPoint::class.java)
         com.nuvio.tv.core.player.TrailerPlayerPool(
             context.applicationContext,
-            dagger.hilt.android.EntryPointAccessors.fromApplication(context.applicationContext, OnDemandPlayerEntryPoint::class.java)
-                .playerSettingsDataStore()
+            entry.playerSettingsDataStore(),
+            entry.trailerSettingsDataStore()
         )
     }
     androidx.compose.runtime.DisposableEffect(ownPool) { onDispose { runCatching { ownPool.release() } } }
@@ -239,7 +240,35 @@ fun OnDemandHomeScreen(
     val onNavigateToDetail: (String, String, String) -> Unit = { id, _, _ -> open(id) }
     val onItemFocus: (MetaPreview) -> Unit = { viewModel.focusHome(it.id) }
     val loadMore: (String, String, String) -> Unit = { catalogId, _, _ -> viewModel.loadMoreHome(catalogId) }
-    val notWatched: (MetaPreview) -> Boolean = { false }
+    // The watched mark, as on Home. A stable lambda that reads the latest watched lists, so
+    // a change only redraws the cards (not the whole page).
+    val watchedSets = viewModel.watched.collectAsStateWithLifecycle()
+    val isWatched: (MetaPreview) -> Boolean = remember(viewModel) {
+        { card: MetaPreview -> viewModel.isWatched(card, watchedSets.value) }
+    }
+    // Holding OK on a card: Home's options (Go to details, Add to Library, Mark as watched),
+    // using the title as your addons know it. Titles only your provider has open their details.
+    val posterOptions: com.nuvio.tv.ui.components.posteroptions.PosterOptionsViewModel = hiltViewModel()
+    val optionsState by posterOptions.controller.state.collectAsStateWithLifecycle()
+    var optionsUid by remember { mutableStateOf<String?>(null) }
+    val longPress: (MetaPreview) -> Unit = { card ->
+        val item = viewModel.homeItem(card.id)
+        if (item != null && !opening) {
+            opening = true
+            scope.launch {
+                try {
+                    val target = viewModel.optionsTarget(card.id)
+                    if (target != null) {
+                        optionsUid = item.uid
+                        posterOptions.controller.show(target.first, target.second)
+                    } else {
+                        providerItem = item
+                    }
+                } finally { opening = false }
+            }
+        }
+    }
+    val onCatalogLongPress: (MetaPreview, String) -> Unit = { card, _ -> longPress(card) }
 
     // Trailers: On Demand's own (found with Nuvio's trailer service), following Nuvio's trailer
     // settings through the layout, and never shared with Home.
@@ -294,7 +323,9 @@ fun OnDemandHomeScreen(
                     sortLabel = seeAllUid?.let { uid ->
                         sortLabel(state.groups.firstOrNull { it.uid == uid }?.sort) ?: viewModel.defaultSortLabel()
                     },
-                    onSort = { sortingUid = seeAllUid }
+                    onSort = { sortingUid = seeAllUid },
+                    isWatched = isWatched,
+                    onLongPress = longPress
                 )
             }
             else -> when (ui.homeLayout) {
@@ -312,8 +343,8 @@ fun OnDemandHomeScreen(
                     onNavigateToCatalogSeeAll = { catalogId, _, _ -> seeAllUid = catalogId },
                     onNavigateToFolderDetail = { _, _ -> },
                     onRemoveContinueWatching = { _, _, _, _ -> },
-                    isCatalogItemWatched = notWatched,
-                    onCatalogItemLongPress = { _, _ -> },
+                    isCatalogItemWatched = isWatched,
+                    onCatalogItemLongPress = onCatalogLongPress,
                     onRequestTrailerPreview = requestTrailerForItem,
                     onItemFocus = onItemFocus,
                     catalogSeeAllLabel = "See all",
@@ -339,8 +370,8 @@ fun OnDemandHomeScreen(
                     onNavigateToCatalogSeeAll = { catalogId, _, _ -> seeAllUid = catalogId },
                     onNavigateToFolderDetail = { _, _ -> },
                     onRemoveContinueWatching = { _, _, _, _ -> },
-                    isCatalogItemWatched = notWatched,
-                    onCatalogItemLongPress = { _, _ -> },
+                    isCatalogItemWatched = isWatched,
+                    onCatalogItemLongPress = onCatalogLongPress,
                     posterCardStyle = posterCardStyle,
                     onItemFocus = onItemFocus,
                     catalogSeeAllLabel = "See all",
@@ -364,8 +395,8 @@ fun OnDemandHomeScreen(
                     onRequestTrailerPreview = requestTrailerById,
                     onLoadMoreCatalog = loadMore,
                     onRemoveContinueWatching = { _, _, _, _ -> },
-                    isCatalogItemWatched = notWatched,
-                    onCatalogItemLongPress = { _, _ -> },
+                    isCatalogItemWatched = isWatched,
+                    onCatalogItemLongPress = onCatalogLongPress,
                     onNavigateToFolderDetail = { _, _ -> },
                     onItemFocus = onItemFocus,
                     onPreloadAdjacentItem = {},
@@ -431,6 +462,13 @@ fun OnDemandHomeScreen(
             onDismiss = { showManage = false }
         )
     }
+    com.nuvio.tv.ui.components.posteroptions.PosterOptionsHost(
+        state = optionsState,
+        controller = posterOptions.controller,
+        onNavigateToDetail = { id, type, addonBaseUrl ->
+            onOpenDetail(id, type, addonBaseUrl.ifBlank { null }, optionsUid.orEmpty())
+        }
+    )
     providerItem?.let { item ->
         ProviderDetailDialog(
             item = item,
@@ -509,6 +547,7 @@ private fun KindTab(label: String, selected: Boolean, onClick: () -> Unit) {
 @dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
 interface OnDemandPlayerEntryPoint {
     fun playerSettingsDataStore(): com.nuvio.tv.data.local.PlayerSettingsDataStore
+    fun trailerSettingsDataStore(): com.nuvio.tv.data.local.TrailerSettingsDataStore
 }
 
 /**

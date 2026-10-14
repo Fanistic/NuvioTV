@@ -81,7 +81,7 @@ class LiveTvPosterResolver @Inject constructor(
         return withContext(if (urgent) Urgency(true) else kotlin.coroutines.EmptyCoroutineContext) { (if (urgent) urgentPermits else vodPermits).withPermit {
             val attempt = Attempt()
             val hit = runCatching {
-                lookup(query, TypeHint(if (series) Kind.SERIES else Kind.MOVIE, strong = true), Clues(imdbId = imdbId, year = year), attempt)
+                lookup(query, TypeHint(if (series) Kind.SERIES else Kind.MOVIE, strong = true), Clues(imdbId = imdbId, year = year), attempt, strictYear = true)
             }.getOrNull()
             if (hit != null) matchCache[key] = hit else if (attempt.reached) noMatch += key
             if (hit == null && !attempt.reached) {
@@ -308,23 +308,23 @@ class LiveTvPosterResolver @Inject constructor(
         return poster
     }
 
-    private suspend fun lookup(query: String, hint: TypeHint?, clues: Clues, attempt: Attempt): Hit? {
+    private suspend fun lookup(query: String, hint: TypeHint?, clues: Clues, attempt: Attempt, strictYear: Boolean = false): Hit? {
         // Wait for the installed addons to load (the first value can be an empty placeholder).
         val addons = withTimeoutOrNull(8_000) {
             addonRepository.getInstalledAddons().first { it.enabledAddons().isNotEmpty() }
         }?.enabledAddons() ?: return null
         val all = searchTargets(addons)
-        if (hint == null) return lookupIn(query, all.take(MAX_CATALOGS), clues, attempt)
+        if (hint == null) return lookupIn(query, all.take(MAX_CATALOGS), clues, attempt, strictYear = strictYear)
         val preferredType = if (hint.kind == Kind.MOVIE) "movie" else "series"
         val preferred = all.filter { it.second.apiType == preferredType }.take(MAX_CATALOGS)
         // Strong hint (episode number, or the guide says "Movie"): only that kind. That's how a
         // sitcom never ends up with a movie poster.
-        if (hint.strong) return lookupIn(query, preferred, clues, attempt)
+        if (hint.strong) return lookupIn(query, preferred, clues, attempt, strictYear = strictYear)
         // Weak hint (just the show's length): look at both kinds and pick the likeliest. A
         // two-hour reality episode ("Bachelor in Paradise") used to stop at the first movie with
         // the same name (a 1961 film) without ever looking at the show.
         val others = all.filter { it.second.apiType != preferredType }.take(MAX_CATALOGS)
-        return lookupIn(query, preferred + others, clues, attempt, preferredType, hint.weight)
+        return lookupIn(query, preferred + others, clues, attempt, preferredType, hint.weight, strictYear = strictYear)
     }
 
     /**
@@ -341,7 +341,13 @@ class LiveTvPosterResolver @Inject constructor(
 ,
         /** A weak preference for "movie" or "series" (from the show's length). */
         preferredType: String? = null,
-        preferredWeight: Double = 15.0
+        preferredWeight: Double = 15.0,
+        /**
+         * On Demand: the provider's year is the release year, so a same-named title from another
+         * year is a different film ("Reporting Live", a 2026 film, got a 3-minute short's poster
+         * and details). Titles more than a year off are left out; no match beats a wrong one.
+         */
+        strictYear: Boolean = false
     ): Hit? {
         val wanted = normalize(query)
         val exact = LinkedHashMap<String, Hit>()
@@ -404,6 +410,13 @@ class LiveTvPosterResolver @Inject constructor(
             }
         }
 
+        val wantYear = clues.year
+        if (strictYear && wantYear != null) {
+            exact.entries.removeAll { entry ->
+                val y = yearOf(entry.value.meta)
+                y != null && kotlin.math.abs(y - wantYear) > 1
+            }
+        }
         if (exact.isNotEmpty()) {
             // Year, cast and description pick the best of several same-named titles; they never
             // throw away the only match (guides' years are often the airing, not the release).

@@ -174,6 +174,7 @@ class LiveTvRecordingScheduler @Inject constructor(
         scope.launch {
             load()
             armAll()
+            watchNetwork()
             // New guide listings: look for new airings of series.
             repository.programs.debounce(10_000).collect { if (_series.value.isNotEmpty()) expandSeries() }
         }
@@ -355,6 +356,19 @@ class LiveTvRecordingScheduler @Inject constructor(
         }
     }
 
+    /** When a schedule will start: recording, or saving from catch-up (for the Recordings screen). */
+    fun startsAt(s: RecordingSchedule): Long = fireTime(s)
+
+    /**
+     * Anything whose time has already passed but is still waiting (its alarm came late or not at
+     * all: the box was asleep, the app was force stopped, or Android held the alarm back) starts
+     * now. Called when the Recordings screen opens.
+     */
+    fun fireOverdue() {
+        val now = System.currentTimeMillis()
+        _schedules.value.filter { fireTime(it) < now - 60_000L }.forEach { fire(it.id) }
+    }
+
     private fun pending(s: RecordingSchedule): PendingIntent {
         val intent = Intent(context, RecordingAlarmReceiver::class.java).setAction(ACTION_FIRE).putExtra(EXTRA_ID, s.id)
         return PendingIntent.getBroadcast(
@@ -418,12 +432,28 @@ class LiveTvRecordingScheduler @Inject constructor(
                 finite = true,
                 fallbacks = CatchupUrlBuilder.alternatives(url, zone),
                 seriesId = s.seriesId,
+                // Cut off part way: the rest of the show, from a little before where it got to
+                // (catch-up links often go by the minute, so a few seconds may repeat).
+                resumeFrom = { doneMs ->
+                    catchup?.let {
+                        val from = s.startMs - PRE_MS - shift + doneMs - 30_000L
+                        CatchupUrlBuilder.build(channel.url, it, from, s.stopMs + POST_MS - shift, System.currentTimeMillis(),
+                            preferHls = false, serverTimezone = zone)
+                    }
+                },
                 onFinished = { rec ->
                     if (rec.status != RecordingStatus.FAILED) s.seriesId?.let { keepOnlyNewest(it) }
-                    if (rec.status == RecordingStatus.FAILED && s.attempts < MAX_TRIES) {
+                    // No connection (the box asleep in standby, Wi-Fi off overnight): that's not the
+                    // show's fault, so it doesn't use up a try. It's tried again while the provider
+                    // still keeps the show, and straight away once the connection is back.
+                    val offline = rec.status == RecordingStatus.FAILED && (!online() || looksOffline(rec.problem))
+                    val keptUntil = s.stopMs + (catchup?.days ?: 1).coerceAtLeast(1) * 24 * 60 * 60_000L - 60 * 60_000L
+                    val retryable = offline || s.attempts < MAX_TRIES
+                    if (rec.status == RecordingStatus.FAILED && retryable && System.currentTimeMillis() < keptUntil) {
                         // Not ready at the provider yet (or a hiccup): try again in a while.
                         recorder.delete(rec.id)
-                        val retry = s.copy(attempts = s.attempts + 1, nextTryMs = System.currentTimeMillis() + RETRY_MS)
+                        if (offline) com.nuvio.tv.livetv.model.LiveTvLoadReport.add("\"${s.title}\": no connection, so it's saved once the connection is back")
+                        val retry = s.copy(attempts = if (offline) s.attempts else s.attempts + 1, nextTryMs = System.currentTimeMillis() + RETRY_MS)
                         scope.launch {
                             mutex.withLock { _schedules.value = (_schedules.value + retry).sortedBy { it.startMs }; save() }
                             arm(retry)
@@ -431,6 +461,61 @@ class LiveTvRecordingScheduler @Inject constructor(
                     }
                 }
             )
+        }
+    }
+
+    // ------------------------------------------------------------------ connection
+
+    private val connectivity get() = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+
+    /** Whether the app can reach the internet right now (false while Android has it cut off). */
+    private fun online(): Boolean = runCatching {
+        val cm = connectivity ?: return@runCatching true
+        val n = cm.activeNetwork ?: return@runCatching false
+        cm.getNetworkCapabilities(n)?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    }.getOrDefault(true)
+
+    /** Failures that mean "no connection at all", not "the provider said no". */
+    private fun looksOffline(problem: String?): Boolean {
+        val p = problem?.lowercase() ?: return false
+        return listOf("unable to resolve host", "unknownhost", "failed to connect", "network is unreachable",
+            "connectexception", "no address associated", "software caused connection abort").any { it in p }
+    }
+
+    @Volatile private var watchingNetwork = false
+
+    /**
+     * When the connection comes back (the box woke up), catch-up saves that are waiting for
+     * their next try go now instead of at their set time.
+     */
+    private fun watchNetwork() {
+        if (watchingNetwork) return
+        watchingNetwork = true
+        runCatching {
+            connectivity?.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) = retryWaitingSoon()
+                override fun onBlockedStatusChanged(network: android.net.Network, blocked: Boolean) {
+                    if (!blocked) retryWaitingSoon()
+                }
+            })
+        }.onFailure { Log.w(TAG, "Couldn't watch the connection", it) }
+    }
+
+    private var retryJob: kotlinx.coroutines.Job? = null
+
+    private fun retryWaitingSoon() {
+        // Several "connection back" signals in a row start it once.
+        retryJob?.cancel()
+        retryJob = scope.launch {
+            kotlinx.coroutines.delay(20_000) // let the connection settle
+            val now = System.currentTimeMillis()
+            val waiting = _schedules.value.filter { it.useCatchup && it.nextTryMs > now }
+            if (waiting.isEmpty()) return@launch
+            mutex.withLock {
+                _schedules.value = _schedules.value.map { s -> if (s in waiting) s.copy(nextTryMs = now) else s }
+                save()
+            }
+            waiting.forEach { fire(it.id) }
         }
     }
 

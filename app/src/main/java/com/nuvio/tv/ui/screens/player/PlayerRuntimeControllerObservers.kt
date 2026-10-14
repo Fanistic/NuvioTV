@@ -528,7 +528,7 @@ internal fun PlayerRuntimeController.loadSavedProgressFor(season: Int?, episode:
 
     scope.launch {
         pendingResumeProgress = null
-        val progress = if (com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType)) {
+        val local = if (com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType)) {
             recordingResumeProgress()
         } else if (isCloudLibraryPlayback) {
             loadCloudLibraryResumeProgress()
@@ -580,7 +580,7 @@ internal suspend fun PlayerRuntimeController.loadSavedProgressSuspend(season: In
     if (!isCloudLibraryPlayback && progressContentId == null) return
 
     pendingResumeProgress = null
-    val progress = if (com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType)) {
+    val local = if (com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType)) {
         recordingResumeProgress()
     } else if (isCloudLibraryPlayback) {
         loadCloudLibraryResumeProgress()

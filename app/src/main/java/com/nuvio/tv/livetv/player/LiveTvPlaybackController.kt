@@ -499,6 +499,15 @@ class LiveTvPlaybackController @Inject constructor(
         if (catchupTitle != null) com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Catch-up \"$catchupTitle\" on ${channel.name}: ${redact(url)}")
         startStallWatch()
         val p = _player ?: attach().also { attachCount-- }
+        // Captions follow the setting until you change them yourself on this channel. Without
+        // this the player switched on captions a stream marks as "default" (ARD, ZDF…) a couple
+        // of seconds in, even with captions off in Settings.
+        if (!captionsHandled) {
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !captionsByDefault)
+                .build()
+        }
         if (currentChannel?.key == channel.key && currentUrl == url && _state.value.error == null &&
             p.playbackState != Player.STATE_IDLE
         ) {
@@ -507,6 +516,7 @@ class LiveTvPlaybackController @Inject constructor(
         }
         reconnectJob?.cancel()
         currentChannel = channel
+        LiveWatching.sourceId = channel.sourceId
         currentUrl = url
         _state.value = LivePlaybackState(channelKey = channel.key, isBuffering = true, catchupTitle = catchupTitle)
         if (bufferFailedKey != null && bufferFailedKey != channel.key) bufferFailedKey = null
@@ -615,6 +625,7 @@ class LiveTvPlaybackController @Inject constructor(
         _player?.stop()
         _player?.clearMediaItems()
         currentChannel = null
+        LiveWatching.sourceId = null
         currentUrl = null
         _state.value = LivePlaybackState()
     }
@@ -1251,6 +1262,7 @@ class LiveTvPlaybackController @Inject constructor(
         _player?.release()
         _player = null
         currentChannel = null
+        LiveWatching.sourceId = null
         currentUrl = null
         _state.value = LivePlaybackState()
     }
@@ -1267,4 +1279,13 @@ class LiveTvPlaybackController @Inject constructor(
         private const val C_TIME_UNSET = Long.MIN_VALUE + 1
         private const val TAG = "LiveTvPlayback"
     }
+}
+
+/**
+ * The playlist Live TV's player is streaming from right now (null when nothing is playing). A
+ * recording that drops checks this: many accounts allow one connection at a time, and watching
+ * another channel from the same provider is the usual reason a recording gets cut off.
+ */
+object LiveWatching {
+    @Volatile var sourceId: String? = null
 }

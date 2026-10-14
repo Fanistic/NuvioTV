@@ -279,7 +279,9 @@ android {
             isEnable = !buildingAppBundle &&
                 (findProperty("livetvTestBuild") as String?)?.toBoolean() != true
             reset()
-            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            // Live TV fork: TV boxes are all ARM. The x86 copies (for PC emulators) only made
+            // the all-in-one APK, the one most people install, far bigger.
+            include("armeabi-v7a", "arm64-v8a")
             isUniversalApk = true
         }
     }

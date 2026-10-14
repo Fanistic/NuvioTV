@@ -35,7 +35,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Build
@@ -45,6 +44,7 @@ import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Person
@@ -163,15 +163,14 @@ private fun settingsSectionSpec(category: SettingsCategory): SettingsSectionSpec
     SettingsCategory.ADVANCED -> SettingsSectionSpec(category, stringResource(R.string.settings_advanced), Icons.Default.Build, destination = SettingsSectionDestination.Inline)
     SettingsCategory.ABOUT -> SettingsSectionSpec(category, stringResource(R.string.about_title), Icons.Default.Info, destination = SettingsSectionDestination.Inline)
     SettingsCategory.DEBUG -> SettingsSectionSpec(category, stringResource(R.string.settings_debug), Icons.Default.BugReport, destination = SettingsSectionDestination.Inline)
-    SettingsCategory.EXPERIENCE -> SettingsSectionSpec(category, stringResource(R.string.settings_experience), Icons.Default.Tune, destination = SettingsSectionDestination.Inline)
     // Live TV fork
     SettingsCategory.LIVE_TV -> SettingsSectionSpec(category, "Live TV", Icons.Default.LiveTv, destination = SettingsSectionDestination.Inline)
+    SettingsCategory.EXPERIENCE -> SettingsSectionSpec(category, stringResource(R.string.settings_experience), Icons.Default.Tune, destination = SettingsSectionDestination.Inline)
 }
 
 @Composable
 fun SettingsScreen(
     showBuiltInHeader: Boolean = true,
-    onNavigateToTracking: () -> Unit = {},
     onNavigateToLiveTv: () -> Unit = {},
     onNavigateToAddons: () -> Unit = {},
     onNavigateToPlugins: () -> Unit = {},
@@ -230,8 +229,8 @@ fun SettingsScreen(
             SettingsCategory.CONTENT_DISCOVERY to FocusRequester(),
             SettingsCategory.INTEGRATION to FocusRequester(),
             SettingsCategory.TRACKING to FocusRequester(),
-            SettingsCategory.PLAYBACK to FocusRequester(),
             SettingsCategory.LIVE_TV to FocusRequester(),
+            SettingsCategory.PLAYBACK to FocusRequester(),
             SettingsCategory.ADVANCED to FocusRequester(),
             SettingsCategory.ABOUT to FocusRequester(),
             SettingsCategory.ACCOUNT to FocusRequester()
@@ -427,7 +426,6 @@ fun SettingsScreen(
                     allowDetailAutofocus = false
                     when (section.category) {
                         SettingsCategory.ACCOUNT -> onNavigateToAuthQrSignIn()
-                        SettingsCategory.TRACKING -> onNavigateToTracking()
                         SettingsCategory.LIVE_TV -> onNavigateToLiveTv()
                         else -> Unit
                     }
@@ -929,8 +927,14 @@ private fun SettingsDetailPane(
                 null
             }
         )
+        SettingsCategory.TRACKING -> TrackingSettingsContent(
+            initialFocusRequester = if (allowDetailAutofocus) {
+                contentFocusRequesters[SettingsCategory.TRACKING]
+            } else {
+                null
+            }
+        )
         SettingsCategory.DEBUG -> DebugSettingsContent()
-        SettingsCategory.TRACKING -> Unit
         SettingsCategory.LIVE_TV -> LiveTvSettingsContent(
             initialFocusRequester = if (allowDetailAutofocus) {
                 contentFocusRequesters[SettingsCategory.LIVE_TV]
@@ -938,46 +942,6 @@ private fun SettingsDetailPane(
                 null
             }
         )
-    }
-}
-
-@Composable
-private fun ContentDiscoverySettingsContent(
-    onNavigateToAddons: () -> Unit,
-    onNavigateToPlugins: () -> Unit,
-    showPlugins: Boolean,
-    initialFocusRequester: FocusRequester?
-) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md)
-    ) {
-        SettingsDetailHeader(
-            title = stringResource(R.string.settings_content_discovery),
-            subtitle = stringResource(R.string.settings_content_discovery_subtitle)
-        )
-        SettingsGroupCard(modifier = Modifier.fillMaxWidth()) {
-            SettingsActionRow(
-                title = stringResource(R.string.addon_title),
-                subtitle = stringResource(R.string.settings_content_discovery_addons_subtitle),
-                onClick = onNavigateToAddons,
-                leadingIcon = Icons.Default.Extension,
-                modifier = if (initialFocusRequester != null) {
-                    Modifier.focusRequester(initialFocusRequester)
-                } else {
-                    Modifier
-                }
-            )
-            if (showPlugins) {
-                SettingsActionRow(
-                    title = stringResource(R.string.plugin_title),
-                    subtitle = stringResource(R.string.settings_content_discovery_plugins_subtitle),
-                    onClick = onNavigateToPlugins,
-                    leadingIcon = Icons.Default.Power
-                )
-            }
-        )
-        SettingsCategory.DEBUG -> DebugSettingsContent()
     }
 }
 

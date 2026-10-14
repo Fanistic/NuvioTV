@@ -99,7 +99,7 @@ data class VodCategory(
  */
 @Singleton
 class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context) :
-    SQLiteOpenHelper(context, "livetv_on_demand.db", null, 7) {
+    SQLiteOpenHelper(context, "livetv_on_demand.db", null, 8) {
 
     init {
         // Browsing On Demand doesn't wait while an import or genre lookup is writing.
@@ -151,6 +151,9 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
         // Version 7: release years taken from a number in the title by mistake ("2038 Origin
         // Unknown" came out as a 2038 release, "1917" as 1917) are worked out again.
         if (oldVersion < 7) runCatching { fixYearsFromNames(db) }
+        // Version 8: titles are only matched to a same-named title from (about) the same year,
+        // so look posters up again (some showed another film's poster and details).
+        if (oldVersion < 8) db.execSQL("DELETE FROM posters")
     }
 
     private fun fixYearsFromNames(db: SQLiteDatabase) {
@@ -191,6 +194,9 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
      * Many providers send an empty year field, and the year in the name was never tried after
      * an empty one, so Newest and Oldest Release had nothing to sort by. Returns how many.
      */
+    /** Gives back space left empty by removed titles (see SqliteCompact). */
+    fun compact(): Long = com.nuvio.tv.livetv.data.SqliteCompact.compactIfWasteful(writableDatabase, "On Demand")
+
     fun fillMissingYears(): Int {
         val db = writableDatabase
         val found = ArrayList<Pair<Long, Int>>()
@@ -592,7 +598,27 @@ class OnDemandDatabase @Inject constructor(@ApplicationContext context: Context)
             return cleanTitle(s).also { displayTitles[s] = it }
         }
 
-        private fun cleanTitle(s: String): String {
+        /**
+         * Names written with dots instead of spaces, the way file names often are
+         * ("EN-TOP -181.Mad.Max.Fury.Road.2015"): spaces back, a "TOP -181" list number in
+         * front and the year at the end taken off, so it reads "Mad Max Fury Road" (the year is
+         * still used for sorting). Other names are left as they are.
+         */
+        private fun undotted(s: String): String {
+            if (DOTTED_WORDS.findAll(s).count() < 2 || s.count { it == ' ' } > s.count { it == '.' }) return s
+            var t = s.replace(DOT_BETWEEN, " ").trim()
+            t = t.replace(TOP_LIST_NUMBER, "").trim()
+            val y = TRAILING_BARE_YEAR.find(t)
+            if (y != null && t.substring(0, y.range.first).any { it.isLetter() }) t = t.substring(0, y.range.first).trim()
+            return t.ifBlank { s }
+        }
+        private val DOTTED_WORDS = Regex("""[\p{L}\p{N}]\.[\p{L}]""")
+        private val DOT_BETWEEN = Regex("""(?<=[\p{L}\p{N}])\.(?=[\p{L}\p{N}])""")
+        private val TOP_LIST_NUMBER = Regex("""(?i)^\s*(?:[a-z]{2,4}\s*-\s*)?top\s*[-#]?\s*\d{0,4}\s*[-.:)]?\s*""")
+        private val TRAILING_BARE_YEAR = Regex("""\s(?:19|20)\d{2}\s*$""")
+
+        private fun cleanTitle(raw: String): String {
+            val s = undotted(raw)
             val t = stripTags(s).replace(PREFIX, "")
                 .replace(YEAR_IN_BRACKETS_TRAIL, "")
                 .replace(YEAR_AT_END, "")

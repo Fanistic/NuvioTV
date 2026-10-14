@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.nuvio.tv.livetv.data.LiveTvRepository
 import com.nuvio.tv.livetv.model.LiveChannel
+import com.nuvio.tv.livetv.player.LiveWatching
 import com.nuvio.tv.livetv.player.TsSegmenter
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -111,7 +112,12 @@ class LiveTvRecorder @Inject constructor(
         onFinished: (LiveTvRecording) -> Unit = {},
         seriesId: String? = null,
         /** The player has just let go of this channel's connection: wait this long before connecting. */
-        startDelayMs: Long = 0L
+        startDelayMs: Long = 0L,
+        /**
+         * Catch-up only: the link for the rest of the show, from this far in (ms). A download that
+         * gets cut off carries on from there instead of stopping with part of the show.
+         */
+        resumeFrom: ((doneMs: Long) -> String?)? = null
     ): LiveTvRecording {
         if (!finite) activeFor(channel.key)?.let { return it }
         val now = System.currentTimeMillis()
@@ -150,7 +156,7 @@ class LiveTvRecorder @Inject constructor(
         jobs[id] = scope.launch {
             // Accounts with one connection can refuse a new one while the old is still closing.
             if (startDelayMs > 0) delay(startDelayMs)
-            record(rec, url, channel.headers, finite, fallbacks, onFinished)
+            record(rec, url, channel.headers, finite, fallbacks, onFinished, channel.sourceId, resumeFrom)
         }
         com.nuvio.tv.livetv.model.LiveTvLoadReport.add("Recording \"$title\" on ${channel.name} until ${java.util.Date(stopAtMs)}")
         return rec
@@ -187,9 +193,16 @@ class LiveTvRecorder @Inject constructor(
         headers: Map<String, String>,
         finite: Boolean = false,
         fallbacks: List<String> = emptyList(),
-        onFinished: (LiveTvRecording) -> Unit = {}
+        onFinished: (LiveTvRecording) -> Unit = {},
+        sourceId: String? = null,
+        resumeFrom: ((doneMs: Long) -> String?)? = null
     ) {
         val links = ArrayDeque((listOf(firstUrl) + fallbacks).distinct())
+        /** Why a connection failed, in words, and whether watching may have caused it. */
+        fun dropped(what: String): String =
+            if (sourceId != null && LiveWatching.sourceId == sourceId)
+                "$what while this box was playing another channel from the same provider (many accounts allow only one connection at a time)"
+            else what
         var url = links.removeFirst()
         val dir = File(start.dir)
         var rec = start
@@ -197,23 +210,31 @@ class LiveTvRecorder @Inject constructor(
         val isHls = url.lowercase().substringBefore('?').endsWith(".m3u8") || url.contains("m3u8", ignoreCase = true)
         try {
             if (isHls) {
-                problem = recordHls(rec, url, headers, dir, finite) { d, size -> rec = progress(rec, d, size) }
+                problem = recordHls(rec, url, headers, dir, finite, { dropped(it) }) { d, size -> rec = progress(rec, d, size) }
             } else {
                 val segmenter = TsSegmenter(dir) { _ -> }
                 var first = true
                 var tries = 0
                 while (scope.isActive && rec.id !in stopRequested && System.currentTimeMillis() < currentStop(rec.id)) {
                     if (!first) {
-                        // A download that got cut off can't carry on where it was: give up after a
-                        // few tries (what's saved is kept). A live recording reconnects until its end.
-                        if (finite && (segmenter.totalSec > 0 || ++tries > 3)) break
-                        segmenter.reconnected(); delay(3_000)
+                        if (finite) {
+                            // A catch-up download that got cut off carries on from where it got to
+                            // (a new link starting there); one that never started gets a few tries.
+                            if (++tries > (if (segmenter.totalSec > 0) 10 else 3)) break
+                            if (segmenter.totalSec > 0) {
+                                url = resumeFrom?.invoke((segmenter.totalSec * 1000).toLong()) ?: break
+                            }
+                            segmenter.reconnected(); delay(3_000L * tries.coerceAtMost(5))
+                        } else {
+                            // A live recording reconnects until its end.
+                            segmenter.reconnected(); delay(3_000)
+                        }
                     }
                     first = false
                     try {
                         val c = open(url, headers)
                         if (c.responseCode !in 200..299) {
-                            problem = "The provider answered HTTP ${c.responseCode}"
+                            problem = dropped("The provider answered HTTP ${c.responseCode}")
                             rec = noteProblem(rec, problem)
                             c.disconnect()
                             // Catch-up: try the other link forms.
@@ -248,7 +269,7 @@ class LiveTvRecorder @Inject constructor(
                             problem = "The drive it was recording to was removed"
                             break
                         }
-                        problem = "The connection dropped (${e.message ?: e.javaClass.simpleName}); it reconnected where it could"
+                        problem = dropped("The connection dropped (${e.message ?: e.javaClass.simpleName})") + "; it reconnected where it could"
                         rec = noteProblem(rec, problem)
                         Log.w(TAG, "Recording ${rec.id}: ${e.message}")
                     }
@@ -306,6 +327,7 @@ class LiveTvRecorder @Inject constructor(
         headers: Map<String, String>,
         dir: File,
         finite: Boolean,
+        dropped: (String) -> String,
         onProgress: (Double, Long) -> Unit
     ): String? {
         var mediaUrl = url
@@ -387,9 +409,12 @@ class LiveTvRecorder @Inject constructor(
             text = try {
                 com.nuvio.tv.livetv.player.LiveHttp.fetch(mediaUrl, headers).let { (t, u) -> mediaUrl = u; t }
             } catch (e: Exception) {
-                problem = "The connection dropped; it reconnected where it could"
+                problem = dropped("The connection dropped (${e.message ?: e.javaClass.simpleName})") + "; it reconnected where it could"
                 gap = saved.isNotEmpty()
-                lastSeq = -1L
+                // A live channel's list moves on while it's away, so it starts again at the newest
+                // pieces. A catch-up show's list is the same one: carry on from the last piece
+                // saved (starting over saved the start of the show twice).
+                if (!finite) lastSeq = -1L
                 delay(3_000)
                 continue
             }

@@ -63,7 +63,11 @@ internal fun OnDemandSeeAll(
     onBack: () -> Unit,
     /** What the group is sorted by ("A–Z"), shown on the Sort button; null hides the button. */
     sortLabel: String? = null,
-    onSort: () -> Unit = {}
+    onSort: () -> Unit = {},
+    /** The watched mark on a card, like Home's. */
+    isWatched: (MetaPreview) -> Boolean = { false },
+    /** Holding OK on a card: Home's options (details, library, watched). */
+    onLongPress: (MetaPreview) -> Unit = {}
 ) {
     BackHandler { onBack() }
 
@@ -153,6 +157,8 @@ internal fun OnDemandSeeAll(
                     posterCardStyle = posterCardStyle,
                     showLabel = showLabels,
                     focusRequester = if (index == 0) firstFocus else null,
+                    isWatched = isWatched(item),
+                    onLongPress = { onLongPress(item) },
                     onFocused = { onFocus(item) },
                     onClick = { onOpen(item.id) }
                 )

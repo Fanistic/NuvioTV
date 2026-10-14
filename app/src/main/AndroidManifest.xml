@@ -24,7 +24,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Live TV fork: scheduled recordings start on time. -->
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <!-- Android 13+: granted automatically (SCHEDULE_EXACT_ALARM isn't on Android 14+), so
+         recordings start on time and can run in the background with the app closed. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
 
     <uses-feature
         android:name="android.hardware.touchscreen"

@@ -10,6 +10,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 @EntryPoint
 @InstallIn(SingletonComponent::class)
@@ -30,6 +31,7 @@ object LiveTvPreload {
     suspend fun start(context: android.content.Context) {
         if (started) return
         started = true
+        clearOldBuffers(context.applicationContext, System.currentTimeMillis())
         val entry = dagger.hilt.android.EntryPointAccessors.fromApplication(
             context.applicationContext, LiveTvStartupEntryPoint::class.java
         )
@@ -42,6 +44,28 @@ object LiveTvPreload {
         val playlists = prefs.playlists.first()
         if (!settings.showInSidebar || playlists.none { it.liveEnabled }) return
         entry.liveTvRepository().ensureLoaded(updateCheckDelayMs = 20_000)
+    }
+}
+
+/**
+ * Pause and Rewind Anytime buffers left behind when the app was closed or crashed mid-buffer
+ * (up to about 35 MB a minute, in the app's own storage). Normally they were only cleared hours
+ * later, the next time a buffer stopped. Buffers started from now on are left alone.
+ */
+private fun clearOldBuffers(context: android.content.Context, before: Long) {
+    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        runCatching {
+            val roots = listOf(java.io.File(context.cacheDir, "timeshift")) +
+                com.nuvio.tv.livetv.record.RecordingStorage.choices(context).mapNotNull { c ->
+                    c.dir.parentFile?.let { java.io.File(it, "timeshift") }
+                }
+            roots.distinct().forEach { root ->
+                root.listFiles()?.forEach { f ->
+                    val started = f.name.toLongOrNull() ?: 0L
+                    if (started < before - 1_000L) runCatching { f.deleteRecursively() }
+                }
+            }
+        }
     }
 }
 

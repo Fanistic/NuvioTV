@@ -1444,7 +1444,6 @@ private fun PlaybackNavHost(
         composable(Screen.Settings.route) {
             SettingsScreen(
                 showBuiltInHeader = !hideBuiltInHeaders,
-                onNavigateToTracking = { navController.navigate(Screen.Tracking.route) },
                 onNavigateToLiveTv = { navController.navigate(Screen.LiveTvSettings.route) },
                 onNavigateToAddons = { navController.navigate(Screen.AddonManager.route) },
                 onNavigateToPlugins = { navController.navigate(Screen.Plugins.route) },

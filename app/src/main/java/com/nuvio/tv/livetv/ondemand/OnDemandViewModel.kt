@@ -70,7 +70,9 @@ class OnDemandViewModel @Inject constructor(
     private val resolver: LiveTvPosterResolver,
     private val tmdb: com.nuvio.tv.core.tmdb.TmdbService,
     private val metaRepository: com.nuvio.tv.domain.repository.MetaRepository,
-    private val trailerService: com.nuvio.tv.data.trailer.TrailerService
+    private val trailerService: com.nuvio.tv.data.trailer.TrailerService,
+    private val watchProgressRepository: com.nuvio.tv.domain.repository.WatchProgressRepository,
+    private val watchedSeriesStateHolder: com.nuvio.tv.data.local.WatchedSeriesStateHolder
 ) : ViewModel() {
 
     private val imdbIds = com.nuvio.tv.livetv.data.boundedCache<String, String>(2_000)
@@ -648,6 +650,51 @@ class OnDemandViewModel @Inject constructor(
     /** The matching title in your addons behind a card (its real id: trailers, like on Home). */
     fun matchedMeta(metaId: String): com.nuvio.tv.domain.model.MetaPreview? =
         VodHomeIds.uidOf(metaId)?.let { homeMatched[it] }
+
+    // ------------------------------------------------------------ watched marks and the options menu
+
+    /** Nuvio's watched movies and fully watched series, for the watched mark on cards (as on Home). */
+    val watched: StateFlow<Pair<Set<String>, Set<String>>> = kotlinx.coroutines.flow.combine(
+        watchProgressRepository.observeWatchedMovieIds(),
+        watchedSeriesStateHolder.fullyWatchedSeriesIds
+    ) { movies, series -> movies to series }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet<String>() to emptySet())
+
+    /**
+     * Whether a card's title is watched in Nuvio. Cards carry On Demand's own ids, so this looks
+     * at the title it was matched to in your addons (and its IMDb id).
+     */
+    fun isWatched(card: com.nuvio.tv.domain.model.MetaPreview, sets: Pair<Set<String>, Set<String>>): Boolean {
+        val uid = VodHomeIds.uidOf(card.id) ?: return false
+        val ids = sets.let { if (card.apiType.equals("series", ignoreCase = true)) it.second else it.first }
+        if (ids.isEmpty()) return false
+        val m = homeMatched[uid]
+        return (m?.id != null && m.id in ids) ||
+            (m?.imdbId != null && m.imdbId in ids) ||
+            imdbIds[uid]?.takeIf { it.isNotBlank() }?.let { it in ids } == true
+    }
+
+    /**
+     * What Home's options menu (details, library, watched) works on for a card: the title as
+     * your addons know it, with its real id. Null when only your provider has it; those titles
+     * can't be added to the library or marked watched, since Nuvio has nothing to file them under.
+     */
+    suspend fun optionsTarget(metaId: String): Pair<com.nuvio.tv.domain.model.MetaPreview, String?>? {
+        val uid = VodHomeIds.uidOf(metaId) ?: return null
+        val item = homeItem(metaId) ?: return null
+        val t = targetFor(item) as? OnDemandTarget.Details ?: return null
+        val isSeries = item.kind == VodKind.SERIES
+        val card = VodHomeIds.toMeta(item, homeMatched[uid], posters[item.uid], nameFor(item))
+        val meta = card.copy(
+            id = t.itemId,
+            type = if (isSeries) com.nuvio.tv.domain.model.ContentType.SERIES else com.nuvio.tv.domain.model.ContentType.MOVIE,
+            rawType = if (isSeries) "series" else "movie",
+            imdbId = card.imdbId ?: t.itemId.takeIf { it.startsWith("tt") } ?: imdbIds[uid]?.takeIf { it.isNotBlank() }
+        )
+        // The watched mark follows straight away (the match is what the mark looks up).
+        if (!homeMatched.containsKey(uid)) homeMatched[uid] = meta
+        return meta to t.addonBaseUrl
+    }
 
     // ------------------------------------------------------------ trailers (On Demand's own)
 

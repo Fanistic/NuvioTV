@@ -84,6 +84,22 @@ class RecordingsViewModel @Inject constructor(
     val schedules = scheduler.schedules
     val series = scheduler.series
 
+    init {
+        // Anything that should have started already (catch-up saves included) starts now.
+        scheduler.fireOverdue()
+    }
+
+    /** "Saving from catch-up at 7:10 PM", "Not ready yet: trying again at 7:40 PM (2 of 3)". */
+    fun catchupNote(s: RecordingSchedule): String {
+        val at = scheduler.startsAt(s)
+        val time = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(at))
+        return when {
+            s.attempts > 0 -> "Not ready at the provider yet: trying again at $time (${s.attempts + 1} of ${LiveTvRecordingScheduler.MAX_TRIES + 1})"
+            at <= System.currentTimeMillis() -> "Saving from catch-up now"
+            else -> "Saved from catch-up at $time, after it ends"
+        }
+    }
+
     private val _posters = MutableStateFlow<Map<String, String>>(emptyMap())
     /** Recording id -> poster, looked up by title the same way the guide does. */
     val posters: StateFlow<Map<String, String>> = _posters.asStateFlow()
@@ -284,7 +300,7 @@ fun RecordingsScreen(
                             InfoCard(
                                 title = s.title + (s.episode?.let { "  ·  $it" } ?: ""),
                                 line = s.channel.name + " · " + dateLabel(s.startMs),
-                                note = if (s.useCatchup) "From catch-up after it ends" + (if (s.attempts > 0) " (trying again)" else "") else null,
+                                note = if (s.useCatchup) viewModel.catchupNote(s) else null,
                                 modifier = if (s.id == firstScheduleId) Modifier.focusRequester(first) else Modifier,
                                 onClick = { scheduleMenu = s }
                             )

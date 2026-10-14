@@ -190,6 +190,7 @@ class LiveTvPreferences @Inject constructor(
         if (id <= 1) key else stringSetPreferencesKey("${key.name}_p$id")
 
     private fun seededKey(id: Int) = booleanPreferencesKey("profile_seeded_p$id")
+    private val SEEDED = Regex("""^profile_seeded_p(\d+)$""")
 
     /**
      * The stored data as profile [id] sees it: its own copies of the personal keys put in place
@@ -327,6 +328,24 @@ class LiveTvPreferences @Inject constructor(
             captionsByDefault = p[Keys.captionsByDefault] ?: d.captionsByDefault
         )
     }.distinctUntilChanged()
+
+    /**
+     * Channels and groups hidden in every profile that uses Live TV. No one sees them, so the
+     * guide doesn't store their listings (big providers' hidden groups made the guide database
+     * many times bigger than what anyone looks at).
+     */
+    val hiddenEverywhere: Flow<HiddenEverywhere> = store.data.map { p ->
+        val ids = listOf(1) + p.asMap().keys.mapNotNull { k ->
+            SEEDED.find(k.name)?.groupValues?.get(1)?.toIntOrNull()
+                ?.takeIf { runCatching { p[booleanPreferencesKey(k.name)] }.getOrNull() == true }
+        }
+        HiddenEverywhere(ids.distinct().map { id ->
+            val v = profileView(p, id)
+            (v[Keys.hiddenChannels] ?: emptySet()) to (v[Keys.hiddenGroups] ?: emptySet())
+        })
+    }.distinctUntilChanged()
+
+    suspend fun currentHiddenEverywhere(): HiddenEverywhere = hiddenEverywhere.first()
 
     val userState: Flow<LiveUserState> = kotlinx.coroutines.flow.combine(store.data, deviceStore.data, profileManager.activeProfileId) { p0, d, id ->
         val p = profileView(p0, id)
@@ -1052,4 +1071,11 @@ class LiveTvPreferences @Inject constructor(
         }
         return arr.toString()
     }
+}
+
+/** Each profile's hidden channels and hidden groups (see [LiveTvPreferences.hiddenEverywhere]). */
+data class HiddenEverywhere(private val views: List<Pair<Set<String>, Set<String>>>) {
+    /** True when no profile shows this channel (hidden itself, or its group is). */
+    fun hides(channelKey: String, groupId: String): Boolean =
+        views.isNotEmpty() && views.all { (channels, groups) -> channelKey in channels || groupId in groups }
 }
