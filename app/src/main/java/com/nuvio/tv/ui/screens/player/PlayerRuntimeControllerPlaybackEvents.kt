@@ -239,7 +239,10 @@ internal fun PlayerRuntimeController.startProgressUpdates() {
                         duration = playerDuration,
                         bufferedPosition = (pos + (view.demuxerCacheDurationSec() * 1000.0).toLong())
                             .coerceAtLeast(displayPosition),
-                        playerReportsLive = view.isLiveStreamNow(),
+                        // Live TV fork: a recording still being made looks live to the player, but
+                        // it's a recording: skipping back and forward stay on.
+                        playerReportsLive = view.isLiveStreamNow() &&
+                            !com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType),
                         isPlaying = playingForWatchClock
                     )
                     // Prefer the largest known duration; MPV can report a shorter one transiently.
@@ -305,7 +308,10 @@ internal fun PlayerRuntimeController.startProgressUpdates() {
                     currentPosition = displayPosition,
                     duration = playerDuration.coerceAtLeast(0L),
                     bufferedPosition = player.bufferedPosition.coerceAtLeast(displayPosition),
-                    playerReportsLive = player.isCurrentMediaItemLive,
+                    // Live TV fork: a recording still being made looks live to the player, but
+                    // it's a recording: skipping back and forward stay on.
+                    playerReportsLive = player.isCurrentMediaItemLive &&
+                        !com.nuvio.tv.livetv.record.RecordingResume.isRecording(contentType),
                     isPlaying = player.isPlaying
                 )
                 // Live TV fork: a recording that has played to its end finishes (and returns to

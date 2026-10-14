@@ -536,3 +536,46 @@ internal fun liveCorner(): androidx.compose.ui.unit.Dp {
     androidx.compose.runtime.remember { LiveCorners.start(context) }
     return LiveCorners.radius.collectAsState().value.dp
 }
+
+/**
+ * A message over the video ("Reconnecting…") with the reason underneath, wrapped onto as many
+ * lines as it needs. A long reason ("Provider refused the stream (HTTP 403): account limit…")
+ * used to sit on the same single line and got cut off, so you couldn't see what was wrong.
+ */
+@Composable
+internal fun PlayerStatusMessage(
+    title: String,
+    detail: String?,
+    modifier: Modifier = Modifier,
+    /** The small guide preview (smaller text) rather than full screen. */
+    compact: Boolean = false
+) {
+    Column(
+        modifier = modifier
+            .padding(if (compact) 8.dp else 32.dp)
+            .widthIn(max = if (compact) 480.dp else 760.dp)
+            .clip(RoundedCornerShape(if (compact) 8.dp else 12.dp))
+            .background(Color.Black.copy(alpha = 0.65f))
+            .padding(horizontal = if (compact) 10.dp else 20.dp, vertical = if (compact) 6.dp else 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp)
+    ) {
+        LiveText(
+            title,
+            color = Color.White,
+            size = if (compact) 14.sp else 18.sp,
+            weight = FontWeight.SemiBold,
+            align = TextAlign.Center
+        )
+        if (!detail.isNullOrBlank()) {
+            LiveText(
+                detail,
+                color = Color.White.copy(alpha = 0.8f),
+                size = if (compact) 12.sp else 15.sp,
+                maxLines = if (compact) 4 else 6,
+                align = TextAlign.Center
+            )
+        }
+    }
+}
+

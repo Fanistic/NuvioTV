@@ -83,6 +83,20 @@ object LiveTvRecordingServer {
             "m4s", "mp4" -> "video/mp4"
             else -> "application/octet-stream"
         }
+        // A recording still being made has no end mark, so a player treats it like a live channel
+        // and starts near the newest part. Watching it should start at the beginning (the
+        // player's own resume position still applies), so say so in the playlist.
+        if (type.contains("mpegurl")) {
+            val text = runCatching { file.readText() }.getOrDefault("")
+            if (!text.contains("#EXT-X-ENDLIST") && !text.contains("#EXT-X-START")) {
+                val body = text.replaceFirst("#EXTM3U", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES").toByteArray()
+                out.write(("HTTP/1.1 200 OK\r\nContent-Type: $type\r\nContent-Length: ${body.size}\r\n" +
+                    "Cache-Control: no-cache\r\nConnection: close\r\n\r\n").toByteArray())
+                if (!method.equals("HEAD", ignoreCase = true)) out.write(body)
+                out.flush()
+                return@use
+            }
+        }
         val length = file.length()
         val start = if (rangeStart >= 0) rangeStart.coerceAtMost(length) else 0L
         val end = if (rangeEnd >= 0) rangeEnd.coerceAtMost(length - 1) else length - 1

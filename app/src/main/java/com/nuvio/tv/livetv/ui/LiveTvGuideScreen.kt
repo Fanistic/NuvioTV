@@ -1324,7 +1324,7 @@ fun LiveTvGuideScreen(
             val showLoading = rememberDelayedTrue(playback.isBuffering && playback.error == null, 1_200)
             val text = when {
                 playback.channelKey == null -> "Press OK on a channel to preview"
-                playback.error != null -> "Reconnecting… (${playback.error})"
+                playback.error != null -> null // shown with its reason below
                 showLoading -> "Loading…"
                 else -> null
             }
@@ -1336,6 +1336,7 @@ fun LiveTvGuideScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     text?.let { LiveText(it, color = NuvioTheme.colors.TextSecondary, size = 14.sp) }
+                    playback.error?.let { PlayerStatusMessage("Reconnecting…", it, compact = true) }
                     playback.catchupTitle?.let {
                         LiveText(
                             "ARCHIVE · $it",
@@ -1930,12 +1931,15 @@ private fun GuideHeader(
                 androidx.compose.runtime.DisposableEffect(Unit) { onDispose { onPreviewBounds(null) } }
                 val overlay = when {
                     playingKey == null -> "Press OK on a channel to preview"
-                    playbackError != null -> "Reconnecting… ($playbackError)"
+                    playbackError != null -> null // shown with its reason below
                     playbackBuffering -> "Loading…"
                     else -> null
                 }
                 overlay?.let {
                     LiveText(it, modifier = Modifier.align(Alignment.Center), color = NuvioTheme.colors.TextSecondary, size = 14.sp)
+                }
+                playbackError?.let {
+                    PlayerStatusMessage("Reconnecting…", it, modifier = Modifier.align(Alignment.Center), compact = true)
                 }
                 catchupTitle?.let {
                     LiveText(

@@ -422,10 +422,18 @@ fun LiveTvPlayerScreen(
         val slowLoading = rememberDelayedTrue(playback.isBuffering, 1_200)
         val centerMessage = when {
             current == null -> "Nothing playing"
-            playback.error != null && playback.reconnectAttempt > 8 -> "Stream unavailable · press OK to retry"
-            playback.error != null -> "Reconnecting… (${playback.reconnectAttempt})"
+            playback.error != null -> null // shown with its reason below
             slowLoading -> "Loading…"
             else -> null
+        }
+        // A problem: what's happening, and why underneath (wrapped, so it isn't cut off).
+        playback.error?.let { reason ->
+            PlayerStatusMessage(
+                title = if (playback.reconnectAttempt > 8) "Stream unavailable · press OK to retry"
+                    else "Reconnecting… (attempt ${playback.reconnectAttempt})",
+                detail = reason,
+                modifier = Modifier.align(Alignment.Center)
+            )
         }
         centerMessage?.let {
             LiveText(
