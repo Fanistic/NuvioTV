@@ -1287,5 +1287,9 @@ class LiveTvPlaybackController @Inject constructor(
  * another channel from the same provider is the usual reason a recording gets cut off.
  */
 object LiveWatching {
-    @Volatile var sourceId: String? = null
+    /** Also tells the app a channel is on (Nuvio's idle slideshow stays away while one is). */
+    val active = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    var sourceId: String?
+        get() = active.value
+        set(value) { active.value = value }
 }

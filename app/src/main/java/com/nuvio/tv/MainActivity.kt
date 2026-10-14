@@ -1321,9 +1321,15 @@ open class MainActivity : ComponentActivity() {
                                 )
                             }
 
+                            // Live TV fork: not over a channel that's playing (the guide's preview or
+                            // full screen); the idle slideshow came up in the middle of watching TV.
+                            val liveTvPlaying by com.nuvio.tv.livetv.player.LiveWatching.active.collectAsState()
+                            // Watching counts as activity: the idle wait starts over when it stops.
+                            LaunchedEffect(liveTvPlaying) { ambientIdleController.onInteraction() }
                             AmbientModeHost(
                                 controller = ambientIdleController,
-                                allowed = currentRoute?.startsWith("player/") != true && autoNextOverlay == null,
+                                allowed = currentRoute?.startsWith("player/") != true && autoNextOverlay == null &&
+                                    liveTvPlaying == null,
                                 onShown = { trailerPlayerPool.stop() }
                             )
                         }
